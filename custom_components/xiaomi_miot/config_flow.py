@@ -77,11 +77,12 @@ async def check_miio_device(hass, user_input, errors):
         device = None
         info = None
         errors['base'] = 'cannot_connect'
-    _LOGGER.debug('Xiaomi Miot config flow: %s', {
-        'user_input': user_input,
-        'miio_info': info,
-        'errors': errors,
-    })
+    _LOGGER.debug(
+        'Xiaomi Miot config flow: host=%s model=%s errors=%s',
+        host,
+        getattr(info, 'model', None),
+        errors,
+    )
     model = ''
     if info is not None:
         if not user_input.get(CONF_MODEL):
@@ -402,7 +403,7 @@ class XiaomiMiotFlowHandler(config_entries.ConfigFlow, BaseFlowHandler, domain=D
                 'filter_models': self.filter_models,
                 CONF_CONFIG_VERSION: ENTRY_VERSION,
             })
-            _LOGGER.debug('Setup xiaomi cloud: %s', {**self.config_data, CONF_PASSWORD: '*', 'service_token': '*'})
+            _LOGGER.debug('Setup xiaomi cloud: keys=%s', sorted(self.config_data))
             return self.async_create_entry(
                 title=f"Xiaomi: {self.config_data.get('user_id')}",
                 data=self.config_data,
@@ -769,7 +770,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 self.config_data.pop('filter_model', None)
                 self.config_data.pop('model_list', None)
             self.hass.config_entries.async_update_entry(self.config_entry, data=self.config_data)
-            _LOGGER.debug('Setup xiaomi cloud: %s', {**self.config_data, CONF_PASSWORD: '*', 'service_token': '*'})
+            _LOGGER.debug('Setup xiaomi cloud: keys=%s', sorted(self.config_data))
             return self.async_create_entry(title='', data={})
         else:
             errors['base'] = 'unknown'

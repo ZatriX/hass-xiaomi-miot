@@ -43,9 +43,9 @@ SERVICE_TO_METHOD = {}
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     entry = HassEntry.init(hass, config_entry).new_adder(ENTITY_DOMAIN, async_add_entities)
-    cloud = await entry.get_cloud()
+    cloud = entry.cloud
 
-    if cloud:
+    if cloud and entry.cloud_ready:
         if not entry.get_config('disable_message'):
             hass.data[DOMAIN]['accounts'].setdefault(cloud.user_id, {})
 

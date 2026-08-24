@@ -26,6 +26,7 @@ class HassEntry:
         self.devices: dict[str, 'Device'] = {}
         self.mac_to_did = {}
         self.did_to_unique = {}
+        self.cloud_ready = False
 
     @staticmethod
     def init(hass: HomeAssistant, entry: ConfigEntry):
@@ -129,6 +130,16 @@ class HassEntry:
             mac = info.get('mac') or did
             self.mac_to_did[mac] = did
         return self.cloud_devices
+
+    async def get_cached_cloud_devices(self):
+        """Return persisted discovery data without checking auth or cache age."""
+        config = self.get_config()
+        devices = await MiotCloud.async_load_cached_devices(
+            self.hass,
+            str(config.get('user_id') or ''),
+            config.get('server_country') or 'cn',
+        )
+        return MiotCloud.devices_by_key(devices, 'did', filters=config)
 
     async def get_cloud_device(self, did=None, mac=None):
         devices = await self.get_cloud_devices()

@@ -343,7 +343,12 @@ class Device(CustomConfigHelper):
         if not obj:
             trans_options = self.custom_config_bool('trans_options', self.entry.get_config('trans_options'))
             urn = await self.get_urn()
-            obj = await MiotSpec.async_from_type(self.hass, urn, trans_options=trans_options)
+            obj = await MiotSpec.async_from_type(
+                self.hass,
+                urn,
+                trans_options=trans_options,
+                cache_only=bool(self.info.get('_miot_cache_only')),
+            )
             dat[self.model] = obj
         if obj:
             self.spec = copy.copy(obj)

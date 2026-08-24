@@ -258,15 +258,6 @@ renew_devices:
       selector:
         text:
 
-get_token:
-  description: Get xiaomi device token.
-  fields:
-    name:
-      description: Keyword of device name in Mihome / IP / Model.
-      required: true
-      selector:
-        text:
-
 get_bindkey:
   description: Get bindkey for ble device from cloud.
   fields:

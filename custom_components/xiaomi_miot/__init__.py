@@ -36,8 +36,10 @@ import homeassistant.helpers.config_validation as cv
 from .core.const import *
 from .core.utils import DeviceException, slugify_object_id, wildcard_models
 from .core import HassEntry, BasicEntity, XEntity # noqa
-from .core.device import Device, AsyncMiIO
+from .core.device import Device, DeviceInfo
+from .core.local_cache import is_local_cache_candidate
 from .core.miot_spec import (
+    MiotSpec,
     MiotService,
     MiotProperty,
     MiotResult,
@@ -242,10 +244,12 @@ async def async_setup_entry(hass: hass_core.HomeAssistant, config_entry: config_
         config['miot_local'] = True
         config[CONF_CONN_MODE] = 'local'
         hass.data[DOMAIN][entry_id] = config
-        _LOGGER.debug('Xiaomi Miot setup config entry: %s', {
-            'entry_id': entry_id,
-            'config': config,
-        })
+        _LOGGER.debug(
+            'Xiaomi Miot setup local entry=%s model=%s host=%s',
+            entry_id,
+            device.model,
+            device.info.host,
+        )
 
     if not config_entry.update_listeners:
         config_entry.add_update_listener(async_update_options)
@@ -264,22 +268,18 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
         'config_entry': config_entry,
         'configs': [],
     }
-    try:
-        cloud = await entry.get_cloud(check=True)
-        config[CONF_XIAOMI_CLOUD] = cloud
-        devices = await entry.get_cloud_devices()
-    except (MiCloudException, MiCloudAccessDenied) as exc:
-        _LOGGER.error('Setup xiaomi cloud for user: %s failed: %s', username, exc)
-        return False
-    if not devices:
-        _LOGGER.warning('None device in xiaomi cloud: %s', username)
-    else:
-        _LOGGER.debug('Setup xiaomi cloud for user: %s, %s devices', username, len(devices))
-    for d in devices.values():
-        device = await entry.new_device(d)
+    loaded = set()
+
+    async def add_device(d, cache_only=False):
+        dat = {**d}
+        if cache_only:
+            dat['_miot_cache_only'] = True
+        device = await entry.new_device(dat)
         if not device.spec:
-            _LOGGER.warning('%s: Device has no spec %s', device.name_model, device.info.urn)
-            continue
+            _LOGGER.warning('%s: Device has no cached spec %s', device.name_model, device.info.urn)
+            return
+        if device.unique_id in loaded:
+            return
         conn = device.conn_mode
         cfg = {
             CONF_DEVICE: device,
@@ -302,9 +302,69 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
             cfg['miot_local'] = True
             cfg['miot_cloud'] = False
         config['configs'].append(cfg)
-        _LOGGER.debug('Xiaomi cloud device: %s', {**cfg, CONF_TOKEN: '****'})
+        loaded.add(device.unique_id)
+        _LOGGER.debug(
+            'Xiaomi device prepared: name=%s model=%s host=%s mode=%s cache_only=%s',
+            device.name,
+            device.info.model,
+            device.info.host,
+            conn,
+            cache_only,
+        )
+
+    try:
+        cached_devices = await entry.get_cached_cloud_devices()
+    except Exception as exc:  # cloud storage must not block local setup
+        cached_devices = {}
+        _LOGGER.warning('Load cached xiaomi devices failed: %s', exc)
+
+    cloud = None
+    try:
+        cloud = await entry.get_cloud(login=False)
+        config[CONF_XIAOMI_CLOUD] = cloud
+    except Exception as exc:  # account state must not block cached local setup
+        _LOGGER.warning('Prepare xiaomi cloud account failed: %s', exc)
+
+    for d in cached_devices.values():
+        if not is_local_cache_candidate(d, MIOT_LOCAL_MODELS):
+            continue
+        info = DeviceInfo(d)
+        if not await MiotSpec.async_cached_type_available(hass, info.urn):
+            _LOGGER.warning('%s: Local cache has no usable spec', info.model)
+            continue
+        await add_device(d, cache_only=True)
+
+    devices = {}
+    if cloud:
+        try:
+            auth_ok = await cloud.async_check_auth(notify=True)
+            if not auth_ok:
+                raise MiCloudException('Xiaomi cloud authentication unavailable')
+            devices = await entry.get_cloud_devices()
+            entry.cloud_ready = True
+        except Exception as exc:  # local devices remain usable without cloud
+            entry.cloud_ready = False
+            _LOGGER.warning(
+                'Xiaomi cloud unavailable for user %s; loaded %s cached local devices: %s',
+                username,
+                len(loaded),
+                exc,
+            )
+
+    if entry.cloud_ready:
+        if not devices:
+            _LOGGER.warning('None device in xiaomi cloud: %s', username)
+        else:
+            _LOGGER.debug('Setup xiaomi cloud for user: %s, %s devices', username, len(devices))
+    for d in devices.values():
+        info = DeviceInfo(d)
+        if info.unique_id in loaded:
+            continue
+        await add_device(d)
+
     hass.data[DOMAIN][entry_id] = config
-    hass.data[DOMAIN]['accounts'].setdefault(cloud.user_id, {CONF_XIAOMI_CLOUD: cloud})
+    if cloud and entry.cloud_ready:
+        hass.data[DOMAIN]['accounts'].setdefault(cloud.user_id, {CONF_XIAOMI_CLOUD: cloud})
     return True
 
 
@@ -319,16 +379,12 @@ async def async_setup_customizes(hass: hass_core.HomeAssistant, config_entry: co
             DEVICE_CUSTOMIZES.setdefault(m, {})
             DEVICE_CUSTOMIZES[m].update(cfg)
     if entry_data:
-        _LOGGER.info('Customizing via config flow: %s', entry_data)
+        _LOGGER.info('Customizing via config flow: keys=%s', sorted(entry_data))
 
 
 async def async_update_options(hass: hass_core.HomeAssistant, config_entry: config_entries.ConfigEntry):
     entry = {**config_entry.data, **config_entry.options}
-    entry.pop(CONF_TOKEN, None)
-    entry.pop(CONF_PASSWORD, None)
-    entry.pop('service_token', None)
-    entry.pop('ssecurity', None)
-    _LOGGER.debug('Xiaomi Miot update options: %s', entry)
+    _LOGGER.debug('Xiaomi Miot update options: keys=%s', sorted(entry))
     hass.data[DOMAIN]['sub_entities'] = {}
     await hass.config_entries.async_reload(config_entry.entry_id)
 
@@ -434,67 +490,6 @@ async def async_reload_integration_config(hass, config):
 
 
 async def async_setup_component_services(hass):
-
-    async def async_get_token(call) -> ServiceResponse:
-        nam = call.data.get('name')
-        kwd = f'{nam}'.strip().lower()
-        cnt = 0
-        lst = []
-        dls = {}
-        beaconkey = miio_info = None
-        for cld in MiotCloud.all_clouds(hass):
-            dvs = await cld.async_get_devices() or []
-            for d in dvs:
-                if not isinstance(d, dict):
-                    continue
-                did = d.get('did') or ''
-                if dls.get(did):
-                    continue
-                dnm = f"{d.get('name') or ''}"
-                dip = d.get('localip') or ''
-                dmd = d.get('model') or ''
-                tok = d.get('token') or ''
-                if kwd in [did, dip] or kwd in dnm.lower() or kwd in dmd:
-                    row = {
-                        'did': did,
-                        CONF_NAME: dnm,
-                        CONF_HOST: dip,
-                        CONF_MODEL: dmd,
-                        CONF_TOKEN: tok,
-                    }
-                    if not beaconkey and 'blt.' in did:
-                        beaconkey = await cld.async_get_beaconkey(did)
-                        row['beaconkey'] = (beaconkey or {}).get('beaconkey', beaconkey)
-                        row.pop(CONF_TOKEN, None)
-                    elif dip and tok:
-                        row['miio_cmd'] = f'miiocli device --ip {dip} --token {tok} info'
-                        if not miio_info:
-                            try:
-                                miio = AsyncMiIO(dip, tok)
-                                miio_info = await miio.info()
-                            except Exception as exc:
-                                miio_info = {'error': str(exc)}
-                            row['miio_info'] = miio_info
-                    lst.append(row)
-                dls[did] = 1
-                cnt += 1
-        if not lst:
-            lst = [f'Not Found "{nam}" in {cnt} devices.']
-        return {
-            'list': lst,
-        }
-
-    kws = {
-        'schema': XIAOMI_MIIO_SERVICE_SCHEMA.extend({
-            vol.Required('name', default=''): cv.string,
-        }),
-    }
-    if SupportsResponse:
-        kws['supports_response'] = SupportsResponse.OPTIONAL,
-    hass.services.async_register(
-        DOMAIN, 'get_token', async_get_token, **kws,
-    )
-
     async def async_renew_devices(call):
         nam = call.data.get('username')
         for cld in MiotCloud.all_clouds(hass):
