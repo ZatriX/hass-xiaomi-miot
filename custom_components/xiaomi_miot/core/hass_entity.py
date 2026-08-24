@@ -57,6 +57,9 @@ class BasicEntity(Entity, CustomConfigHelper):
     async def async_set_miot_property(self, siid, piid, value, **kwargs):
         return await self.device.async_set_miot_property(siid, piid, value, **kwargs)
 
+    async def async_set_miot_property_local(self, siid, piid, value, **kwargs):
+        return await self.device.async_set_miot_property_local(siid, piid, value)
+
     async def async_call_action(self, siid, aiid=None, params=None, **kwargs):
         if isinstance(siid, MiotAction):
             if params is None:

@@ -95,6 +95,37 @@ procedure rather than a startup dependency:
 
 The integration does not control DNS, routing, or firewall state.
 
+## Explicit local-only property write
+
+The `xiaomi_miot.set_miot_property_local` action is a separate, fail-closed
+primitive for controlled LAN write validation. It accepts an entity ID, exact
+MIoT service ID (`siid`), property ID (`piid`), and value. The action requires
+an initialized local transport whose most recent transport state is healthy,
+then calls `device.local.async_send("set_properties", ...)` directly.
+
+The action never invokes Xiaomi Cloud. A missing or unhealthy local transport,
+a LAN exception, or an invalid device response returns an error without cloud
+retry. Existing `set_property` and `set_miot_property` dispatch semantics are
+unchanged; integrations and dashboards do not switch to the new action
+implicitly.
+
+No production write has been performed with this primitive. Its first physical
+canary remains a separate approval gate.
+
+### Physical canary candidate
+
+For the available `dmaker.fan.p33` unit Fyodor, the cached MIoT spec exposes
+`indicator-light.on` as service 4, property 1, boolean, with read/write/notify
+access. Its current HA state is off. This is lower risk than repeating
+`fan.on=false`: it belongs to a dedicated indicator-light service and has no
+specified relationship to fan mode, speed, swing, motor control, or timers.
+
+A same-value `indicator-light.on=false` write is therefore the preferred next
+canary candidate. Firmware behavior can never be proven solely from the MIoT
+schema, so the physical write still requires explicit approval and before/after
+read-only snapshots. `fan.on` is not recommended because repeated power-state
+writes could re-run device shutdown behavior while horizontal swing is enabled.
+
 ## Compatibility and security
 
 The integration domain, config-entry type, device identifiers, unique-ID
@@ -120,8 +151,9 @@ data and must never be committed or placed in diagnostics.
 - Cloud-only entities remain unavailable while Xiaomi authentication is down.
 - Include-style device filters can still exclude a newly discovered device;
   operators must deliberately update such filters before expecting entities.
-- The cache-first lifecycle at commit `16ce8d3b` passed its production canary.
-  The explicit refresh change remains un-deployed until its separate no-op
-  production canary is reviewed and approved.
+- The cache-first lifecycle and explicit no-op discovery refresh passed their
+  production canaries at commit `2627d382`.
+- The explicit local-only write primitive is implemented and unit-tested but
+  remains un-deployed and physically unvalidated.
 - A physical new-device onboarding test remains deferred until a new Xiaomi
   device is actually available.

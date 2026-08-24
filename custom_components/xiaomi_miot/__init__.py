@@ -107,6 +107,16 @@ SERVICE_TO_METHOD_BASE = {
             },
         ),
     },
+    'set_miot_property_local': {
+        'method': 'async_set_miot_property_local',
+        'schema': XIAOMI_MIIO_SERVICE_SCHEMA.extend(
+            {
+                vol.Required('siid'): int,
+                vol.Required('piid'): int,
+                vol.Required('value'): cv.match_all,
+            },
+        ),
+    },
     'get_properties': {
         'method': 'async_get_properties',
         'schema': XIAOMI_MIIO_SERVICE_SCHEMA.extend(

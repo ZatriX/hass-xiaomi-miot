@@ -1119,6 +1119,48 @@ class Device(CustomConfigHelper):
             self.dispatch(self.decode(result.to_json()))
         return result
 
+    async def async_set_miot_property_local(self, siid, piid, value):
+        """Set one MIoT property over LAN without any cloud fallback."""
+        iid = MiotSpec.unique_prop(siid, piid)
+        pms = {
+            'did': str(self.did or iid),
+            'siid': siid,
+            'piid': piid,
+            'value': value,
+        }
+        if not self.local or self._local_state is not True:
+            self.log.warning(
+                'Local-only MIoT property write rejected: local transport unavailable',
+            )
+            return MiotResult(
+                pms,
+                code=-1,
+                error='Local transport unavailable',
+            )
+        try:
+            results = await self.local.async_send('set_properties', [pms])
+        except Exception as exc:
+            self.log.warning(
+                'Local-only MIoT property write failed: %s',
+                type(exc).__name__,
+            )
+            return MiotResult(
+                pms,
+                code=-1,
+                error='Local transport failed',
+            )
+        result = MiotResults(results).first
+        if not result or not result.is_success:
+            self.log.warning('Local-only MIoT property write was not accepted')
+            return result or MiotResult(
+                pms,
+                code=-1,
+                error='Local transport returned no result',
+            )
+        result.value = value
+        self.dispatch(self.decode(result.to_json()))
+        return result
+
     async def async_call_action(self, siid, aiid, params=None, **kwargs):
         did = self.did or MiotSpec.unique_prop(siid, aiid=aiid)
         pms = {

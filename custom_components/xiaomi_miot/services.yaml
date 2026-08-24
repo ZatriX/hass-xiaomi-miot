@@ -102,6 +102,41 @@ set_miot_property:
       selector:
         object:
 
+set_miot_property_local:
+  description: Set a MIoT property over the local LAN transport only. Fails if local transport is unavailable and never falls back to Xiaomi Cloud.
+  fields:
+    entity_id:
+      description: ID of the entity whose device will receive the local command.
+      example: fan.dmaker_p33_028a_fan
+      required: true
+      selector:
+        entity:
+          integration: xiaomi_miot
+    siid:
+      description: MIoT service ID.
+      example: 4
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box
+    piid:
+      description: MIoT property ID.
+      example: 1
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box
+    value:
+      description: Property value.
+      example: false
+      required: true
+      selector:
+        object:
+
 call_action:
   description: Call miot action.
   fields:
