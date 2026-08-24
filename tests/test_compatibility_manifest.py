@@ -50,3 +50,41 @@ def test_compare_detects_identity_and_metadata_changes():
     report = compare(before, changed)
     assert report['compatible'] is False
     assert len(report['changed']) == 1
+
+
+def test_compare_treats_hvac_modes_as_unordered():
+    before = [{
+        'entity_id': 'climate.test',
+        'unique_id': 'stable',
+        'capabilities': {'hvac_modes': ['auto', 'off']},
+    }]
+    after = [{
+        'entity_id': 'climate.test',
+        'unique_id': 'stable',
+        'capabilities': {'hvac_modes': ['off', 'auto']},
+    }]
+
+    report = compare(before, after)
+
+    assert report['compatible'] is True
+    assert report['before_sha256'] == report['after_sha256']
+    assert report['changed'] == []
+
+
+def test_compare_preserves_order_for_select_options():
+    before = [{
+        'entity_id': 'select.test',
+        'unique_id': 'stable',
+        'capabilities': {'options': ['low', 'medium', 'high']},
+    }]
+    after = [{
+        'entity_id': 'select.test',
+        'unique_id': 'stable',
+        'capabilities': {'options': ['high', 'medium', 'low']},
+    }]
+
+    report = compare(before, after)
+
+    assert report['compatible'] is False
+    assert report['before_sha256'] != report['after_sha256']
+    assert len(report['changed']) == 1
