@@ -39,7 +39,14 @@ from .core.utils import (
     in_china,
     async_analytics_track_event,
 )
-from .core.const import SUPPORTED_DOMAINS, CLOUD_SERVERS, CONF_XIAOMI_CLOUD, HA_VERSION
+from .core.const import (
+    SUPPORTED_DOMAINS,
+    CLOUD_SERVERS,
+    CONF_XIAOMI_CLOUD,
+    HA_VERSION,
+    MIOT_LOCAL_MODELS,
+)
+from .core.cloud_refresh import async_refresh_cloud_discovery
 from .core.device import MiioInfo
 from .core.miot_spec import MiotSpec
 from .core.mini_miio import AsyncMiIO
@@ -159,9 +166,13 @@ class BaseFlowHandler:
         mic = None
         try:
             mic = await self.get_cloud(user_input)
-            dvs = await mic.async_get_devices(renew=renew_devices) or []
             if renew_devices:
-                await MiotSpec.async_get_model_type(self.hass, 'xiaomi.miot.auto', use_remote=True)
+                await async_refresh_cloud_discovery(
+                    self.hass, mic, MIOT_LOCAL_MODELS
+                )
+                dvs = await mic.async_get_cached_devices() or []
+            else:
+                dvs = await mic.async_get_devices() or []
             self.context.pop('captchaIck', None)
         except (MiCloudException, MiCloudAccessDenied, Exception) as exc:
             err = f'{exc}'

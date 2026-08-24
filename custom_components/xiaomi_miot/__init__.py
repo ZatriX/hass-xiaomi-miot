@@ -30,6 +30,7 @@ from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.reload import async_integration_yaml_config
 from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.config_validation as cv
 
@@ -38,6 +39,10 @@ from .core.utils import DeviceException, slugify_object_id, wildcard_models
 from .core import HassEntry, BasicEntity, XEntity # noqa
 from .core.device import Device, DeviceInfo
 from .core.local_cache import is_local_cache_candidate
+from .core.cloud_refresh import (
+    CloudDiscoveryRefreshError,
+    async_refresh_cloud_discovery,
+)
 from .core.miot_spec import (
     MiotSpec,
     MiotService,
@@ -489,22 +494,68 @@ async def async_reload_integration_config(hass, config):
     return config
 
 
-async def async_setup_component_services(hass):
-    async def async_renew_devices(call):
-        nam = call.data.get('username')
-        for cld in MiotCloud.all_clouds(hass):
-            if nam and str(nam) not in [cld.user_id, cld.username]:
-                continue
-            dvs = await cld.async_renew_devices()
-            cnt = len(dvs)
-            _LOGGER.info('Renew xiaomi devices for %s. Got %s devices.', cld.username, cnt)
-        return True
+async def async_refresh_devices_service(hass, call):
+    """Refresh one explicitly selected account without coupling runtime health."""
+    entry_id = call.data.get('config_entry_id')
+    username = call.data.get('username')
+    entries = list(HassEntry.ALL.values())
+    if entry_id:
+        entries = [entry for entry in entries if entry.id == entry_id]
+    elif username:
+        entries = [
+            entry
+            for entry in entries
+            if str(username) in [
+                str(entry.get_config('user_id') or ''),
+                str(entry.get_config(CONF_USERNAME) or ''),
+            ]
+        ]
+    else:
+        raise HomeAssistantError(
+            'Select one Xiaomi Miot config entry for discovery refresh'
+        )
+    if len(entries) != 1:
+        raise HomeAssistantError(
+            'Xiaomi discovery refresh requires exactly one loaded config entry'
+        )
 
-    hass.services.async_register(
-        DOMAIN, 'renew_devices', async_renew_devices,
+    entry = entries[0]
+    cloud = await entry.get_cloud(login=False)
+    if not cloud:
+        raise CloudDiscoveryRefreshError(
+            'The selected config entry has no Xiaomi account'
+        )
+    result = await async_refresh_cloud_discovery(
+        hass, cloud, MIOT_LOCAL_MODELS
+    )
+
+    entry.cloud_devices = None
+    if result.new or result.updated:
+        result.reloaded = bool(
+            await hass.config_entries.async_reload(entry.id)
+        )
+    summary = result.as_dict()
+    _LOGGER.info(
+        'Refreshed Xiaomi cloud discovery for entry=%s: %s',
+        entry.id,
+        summary,
+    )
+    return summary
+
+
+async def async_setup_component_services(hass):
+
+    kws = {}
+    if SupportsResponse:
+        kws['supports_response'] = SupportsResponse.OPTIONAL
+    async_register_admin_service(
+        hass, DOMAIN, 'renew_devices', async_refresh_devices_service,
         schema=vol.Schema({
-            vol.Optional('username', default=''): cv.string,
+            vol.Exclusive('config_entry_id', 'scope'): cv.string,
+            # Backward-compatible account scope for existing service callers.
+            vol.Exclusive('username', 'scope'): cv.string,
         }),
+        **kws,
     )
 
     async def _handle_reload_config(service):

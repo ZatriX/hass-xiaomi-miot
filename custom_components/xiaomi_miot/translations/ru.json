@@ -90,7 +90,7 @@
                     "captcha": "Captcha",
                     "server_country": "Регион сервера MiCloud",
                     "conn_mode": "Режим подключения устройств",
-                    "renew_devices": "Заставлять устройства обновляться",
+                    "renew_devices": "Обновить устройства из Xiaomi Cloud",
                     "disable_message": "Выключить датчик уведомлений от Mi Home"
                 }
             },

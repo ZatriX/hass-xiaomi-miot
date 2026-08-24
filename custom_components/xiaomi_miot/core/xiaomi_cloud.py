@@ -22,6 +22,7 @@ from homeassistant.const import (
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.components import persistent_notification
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, CONF_XIAOMI_CLOUD
 from .utils import RC4, aiohttp_retry, local_zone, logger_filter
@@ -176,7 +177,7 @@ class MiotCloud(micloud.MiCloud):
             except requests.exceptions.Timeout:
                 return None
             # auth err
-            _LOGGER.info('Xiaomi auth failed, try relogin. %s', rdt)
+            _LOGGER.info('Xiaomi auth failed, try relogin.')
         nid = f'xiaomi-miot-auth-warning-{self.user_id}'
         need_verify = None
         try:
@@ -196,9 +197,8 @@ class MiotCloud(micloud.MiCloud):
                 nid,
             )
             _LOGGER.error(
-                'Xiaomi account: %s auth failed, Please update option for this integration to refresh token.\n%s',
+                'Xiaomi account: %s auth failed, Please update option for this integration to refresh token.',
                 self.user_id,
-                rdt,
             )
         elif need_verify:
             raise need_verify
@@ -263,10 +263,10 @@ class MiotCloud(micloud.MiCloud):
         code = rdt.get('code') if rdt else None
         if code == 3:
             self._logout()
-            _LOGGER.warning('Unauthorized while request to %s, response: %s, logged out.', api, rsp)
+            _LOGGER.warning('Unauthorized while request to %s, logged out.', api)
         elif code or not rdt:
             fun = _LOGGER.info if rdt else _LOGGER.warning
-            fun('Request xiaomi api: %s %s failed, response: %s', api, data, rsp)
+            fun('Request xiaomi api failed: api=%s code=%s', api, code)
         return rdt
 
     async def async_get_device(self, mac=None, host=None):
@@ -290,7 +290,7 @@ class MiotCloud(micloud.MiCloud):
         result = rdt.get('result')
         if result:
             return result['list']
-        _LOGGER.warning('Got xiaomi devices for %s failed: %s', self.username, rdt)
+        _LOGGER.warning('Got xiaomi devices for %s failed', self.username)
         return None
 
     async def get_all_devices(self, homes=None):
@@ -318,7 +318,7 @@ class MiotCloud(micloud.MiCloud):
                 }, debug=False, timeout=20) or {}
                 result = rdt.get('result') or {}
                 if not result:
-                    _LOGGER.warning('Got xiaomi devices for %s failed: %s', self.username, rdt)
+                    _LOGGER.warning('Got xiaomi devices for %s failed', self.username)
                 for d in result.get('device_info') or []:
                     did = d.get('did')
                     devices.setdefault(did, {}).update(d)
@@ -338,7 +338,7 @@ class MiotCloud(micloud.MiCloud):
         }, debug=False, timeout=60) or {}
         result = rdt.get('result') or {}
         if not result:
-            _LOGGER.warning('Got xiaomi home devices for %s failed: %s', self.username, rdt)
+            _LOGGER.warning('Got xiaomi home devices for %s failed', self.username)
         devices = result.setdefault('devices', {})
         for h in result.get('homelist', []):
             for r in h.get('roomlist', []):
@@ -368,21 +368,19 @@ class MiotCloud(micloud.MiCloud):
             cds = dat.get('devices') or []
             if not renew and dat.get('update_time', 0) > (now - 86400):
                 dvs = cds
+        refresh_metadata = {}
+        if isinstance(dat, dict):
+            refresh_metadata = dat.get('refresh_metadata') or {}
         if not dvs:
             try:
-                hls = await self.get_home_devices()
-                dvs = await self.get_all_devices(hls.get('homelist', []))
+                fresh = await self.async_discover_devices()
+                dvs = fresh.get('devices') or []
                 if dvs:
-                    if hls:
-                        hds = hls.get('devices') or {}
-                        dvs = [
-                            {**d, **(hds.get(d.get('did')) or {})}
-                            for d in dvs
-                        ]
                     dat = {
                         'update_time': now,
                         'devices': dvs,
-                        'homes': hls.get('homelist', []),
+                        'homes': fresh.get('homes') or [],
+                        'refresh_metadata': refresh_metadata,
                     }
                     await store.async_save(dat)
                     _LOGGER.info('Got %s devices from xiaomi cloud', len(dvs))
@@ -394,6 +392,41 @@ class MiotCloud(micloud.MiCloud):
         if return_all:
             return dat
         return dvs
+
+    async def async_discover_devices(self):
+        """Fetch a fresh discovery candidate without writing persisted cache."""
+        homes = await self.get_home_devices()
+        if not isinstance(homes, dict):
+            raise MiCloudException('Invalid Xiaomi home discovery response')
+        devices = await self.get_all_devices(homes.get('homelist', []))
+        if not isinstance(devices, list):
+            raise MiCloudException('Invalid Xiaomi device discovery response')
+        home_devices = homes.get('devices') or {}
+        devices = [
+            {**device, **(home_devices.get(device.get('did')) or {})}
+            for device in devices
+            if isinstance(device, dict)
+        ]
+        return {
+            'devices': devices,
+            'homes': homes.get('homelist', []),
+        }
+
+    def device_cache_store(self):
+        """Return the account-scoped persisted discovery store."""
+        fnm = f'xiaomi_miot/devices-{self.user_id}-{self.default_server}.json'
+        return Store(self.hass, 1, fnm)
+
+    async def async_load_device_cache_payload(self):
+        """Load the complete persisted discovery payload."""
+        try:
+            return await self.device_cache_store().async_load() or {}
+        except (ValueError, HomeAssistantError):
+            return {}
+
+    async def async_save_device_cache_payload(self, payload: dict):
+        """Atomically replace the discovery payload through HA Store."""
+        await self.device_cache_store().async_save(payload)
 
     async def async_renew_devices(self):
         return await self.async_get_devices(renew=True)

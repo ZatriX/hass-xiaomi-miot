@@ -469,12 +469,16 @@
             }
         },
         "renew_devices": {
-            "name": "Renew devices",
-            "description": "Renew cached xiaomi devices",
+            "name": "Refresh devices from Xiaomi cloud",
+            "description": "Refresh one account's discovery cache and safely reconcile newly discovered devices.",
             "fields": {
+                "config_entry_id": {
+                    "name": "Config entry",
+                    "description": "Xiaomi Miot account config entry to refresh."
+                },
                 "username": {
-                    "name": "Username",
-                    "description": ""
+                    "name": "Xiaomi account",
+                    "description": "Legacy account scope; prefer Config entry."
                 }
             }
         },

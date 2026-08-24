@@ -250,9 +250,18 @@ get_device_data:
             - month
 
 renew_devices:
-  description: Renew xiaomi devices.
+  name: Refresh devices from Xiaomi cloud
+  description: Refresh one account's discovery cache and safely reconcile newly discovered devices.
   fields:
+    config_entry_id:
+      name: Config entry
+      description: Xiaomi Miot account config entry to refresh.
+      required: true
+      selector:
+        config_entry:
+          integration: xiaomi_miot
     username:
+      name: Xiaomi account
       description: Xiaomi Account ID / Email / Phone.
       required: false
       selector:

@@ -41,6 +41,60 @@ Discovery refresh never replaces valid persisted data with an empty failed
 response. This branch does not bundle account data, device tokens, or generated
 production cache files.
 
+## Explicit cloud discovery refresh
+
+New-device onboarding uses the existing Home Assistant-native
+`xiaomi_miot.renew_devices` action, displayed as **Refresh devices from Xiaomi
+cloud**. The action is scoped to one Xiaomi Miot account config entry through
+the `config_entry_id` selector. The legacy `username` scope remains accepted for
+backward compatibility, but an unscoped refresh is rejected. Home Assistant
+restricts the action to administrators.
+
+The operator flow is:
+
+1. add and fully enrol the device in Xiaomi Home;
+2. run **Refresh devices from Xiaomi cloud** for the account config entry;
+3. allow the integration to authenticate and perform discovery without using
+   the 24-hour discovery shortcut;
+4. review the returned safe count summary;
+5. let Home Assistant reload the config entry only when device facts changed.
+
+The response contains `discovered`, `new`, `updated`, `unchanged`,
+`local_capable_new`, `cloud_only_new`, `failed`, `new_models`, and `reloaded`.
+It never contains tokens, credentials, cookies, or raw Xiaomi responses.
+
+Refresh uses conservative merge semantics. Devices missing from one cloud
+response remain in the persisted cache. Existing device identity facts are
+retained, while changed IP addresses and tokens are accepted only after format
+validation. A newly discovered model already present in `MIOT_LOCAL_MODELS`
+must have a valid IP, 32-character hexadecimal token, MIoT spec type, and usable
+spec cache before it is committed as local-capable. Other models remain on the
+existing cloud-only path and are never added to `MIOT_LOCAL_MODELS`
+automatically.
+
+The model/type index and required spec/language payloads are refreshed and
+validated first. Each HA Store write is atomic, and the merged device discovery
+payload is committed last. Invalid candidates are skipped individually. An
+authentication, discovery, or final cache-commit failure returns an operator
+error, performs no config-entry reload, and leaves the loaded local runtime and
+last known-good discovery cache in place. A successful no-op refresh also skips
+reload, avoiding needless runtime interruption.
+
+Successful discovery stores safe provenance metadata alongside the backward-
+compatible cache payload: schema version, last successful refresh timestamp,
+integration version, cache source, Xiaomi server, and account user ID scope.
+Older cache payloads without this metadata remain readable.
+
+For a future Xiaomi egress policy, onboarding is deliberately an operator
+procedure rather than a startup dependency:
+
+1. temporarily allow Xiaomi account, API, and MIoT-spec egress;
+2. run the explicit refresh and verify its summary;
+3. verify the new device after the conditional config-entry reload;
+4. block Xiaomi egress again outside the integration.
+
+The integration does not control DNS, routing, or firewall state.
+
 ## Compatibility and security
 
 The integration domain, config-entry type, device identifiers, unique-ID
@@ -64,5 +118,10 @@ data and must never be committed or placed in diagnostics.
 - An offline LAN device remains unavailable; cache-first startup does not mask
   physical reachability failures.
 - Cloud-only entities remain unavailable while Xiaomi authentication is down.
-- This branch has not been deployed to production. A production canary remains
-  a separate approval gate.
+- Include-style device filters can still exclude a newly discovered device;
+  operators must deliberately update such filters before expecting entities.
+- The cache-first lifecycle at commit `16ce8d3b` passed its production canary.
+  The explicit refresh change remains un-deployed until its separate no-op
+  production canary is reviewed and approved.
+- A physical new-device onboarding test remains deferred until a new Xiaomi
+  device is actually available.

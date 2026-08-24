@@ -21,6 +21,12 @@ class FakeStore:
     async def async_load(self):
         return self.values.get(self.key)
 
+    async def async_save(self, value):
+        self.values[self.key] = value
+
+    async def async_remove(self):
+        self.values.pop(self.key, None)
+
 
 @pytest.mark.asyncio
 async def test_stale_device_cache_ignores_discovery_ttl(monkeypatch):
@@ -134,3 +140,83 @@ async def test_missing_cached_spec_does_not_call_endpoint(monkeypatch):
         SimpleNamespace(), URN, cache_only=True
     ) is None
     download.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_explicit_spec_refresh_preserves_known_good_cache(monkeypatch):
+    spec_key = f'xiaomi_miot/{URN}.json'
+    lang_key = f'xiaomi_miot/spec-langs/{URN}.json'
+    if platform.system() == 'Windows':
+        spec_key = spec_key.replace(':', '_')
+        lang_key = lang_key.replace(':', '_')
+    FakeStore.values = {
+        spec_key: {
+            '_updated_time': 1,
+            'type': URN,
+            'services': [{
+                'iid': 2,
+                'type': 'urn:miot-spec-v2:service:fan:00007808:1',
+                'description': 'Fan',
+                'properties': [],
+                'actions': [],
+            }],
+        },
+        lang_key: {
+            '_updated_time': 1,
+            'type': URN,
+            'data': {'en': {}},
+        },
+    }
+    monkeypatch.setattr(
+        'custom_components.xiaomi_miot.core.miot_spec.Store', FakeStore
+    )
+    download = AsyncMock(side_effect=[
+        {'type': URN, 'services': []},
+        {'data': {}},
+    ])
+    monkeypatch.setattr(MiotSpec, 'async_download_miot_spec', download)
+
+    spec = await MiotSpec.async_from_type(
+        SimpleNamespace(config=SimpleNamespace(language='en')),
+        URN,
+        use_remote=True,
+    )
+
+    assert spec.type == URN
+    assert spec.services
+    assert FakeStore.values[spec_key]['services']
+    assert FakeStore.values[lang_key]['type'] == URN
+
+
+@pytest.mark.asyncio
+async def test_invalid_model_index_refresh_preserves_known_good_cache(monkeypatch):
+    FakeStore.values = {
+        'xiaomi_miot/instances.json': {
+            '_updated_time': 1,
+            'dmaker.fan.p33': {
+                'type': URN,
+                'status': 'released',
+                'version': 1,
+            },
+        },
+    }
+    monkeypatch.setattr(
+        'custom_components.xiaomi_miot.core.miot_spec.Store', FakeStore
+    )
+    monkeypatch.setattr(
+        MiotSpec,
+        'async_download_miot_spec',
+        AsyncMock(return_value={'error': 'partial response'}),
+    )
+
+    spec_type = await MiotSpec.async_get_model_type(
+        SimpleNamespace(),
+        'dmaker.fan.p33',
+        use_remote=True,
+    )
+
+    assert spec_type == URN
+    assert (
+        FakeStore.values['xiaomi_miot/instances.json']['dmaker.fan.p33']['type']
+        == URN
+    )

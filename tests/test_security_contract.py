@@ -62,3 +62,12 @@ def test_setup_and_config_flow_logs_do_not_render_config_or_tokens():
     assert "{**cfg, CONF_TOKEN" not in setup
     assert "'user_input': user_input" not in flow
     assert "'miio_info': info" not in flow
+
+
+def test_discovery_and_auth_failure_logs_do_not_render_cloud_payloads():
+    source = (
+        ROOT / 'custom_components/xiaomi_miot/core/xiaomi_cloud.py'
+    ).read_text(encoding='utf-8')
+    assert "auth failed, try relogin. %s" not in source
+    assert "failed, response: %s" not in source
+    assert "failed: %s', self.username, rdt" not in source
