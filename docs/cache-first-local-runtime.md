@@ -11,13 +11,23 @@ For Xiaomi-account config entries, startup now:
 2. validates model, IP address, 32-character hexadecimal token, and spec type;
 3. accepts only models already present in `MIOT_LOCAL_MODELS`;
 4. requires a persisted MIoT spec, then constructs local devices from cache;
-5. prepares and authenticates the Xiaomi account best-effort;
-6. refreshes normal cloud discovery when authentication succeeds.
+5. forwards entity platforms and completes config-entry setup;
+6. starts bounded Xiaomi authentication/discovery as a config-entry-owned
+   background task.
 
 Account verification, expired credentials, corrupt account auth storage, Xiaomi
 API outages, and network failures no longer fail cached local devices. Cloud
 message and scene-history sensors are created only while the account is ready.
 No cloud fallback was added to local reads, writes, or actions.
+
+The background bootstrap has a 45-second attempt timeout and retries after 60,
+300, then 900 seconds. It is cancelled on config-entry unload, and starting a
+replacement task cancels the previous one. Successful late discovery enriches
+the existing runtime and creates only missing cloud/cloud-only entities through
+the already registered platform adders; it does not rebuild cached local
+devices or require a config-entry reload. An entry with no usable local cache
+keeps the upstream synchronous cloud setup behavior instead of pretending that
+a local runtime exists.
 
 The supported household model families are:
 
@@ -109,22 +119,20 @@ retry. Existing `set_property` and `set_miot_property` dispatch semantics are
 unchanged; integrations and dashboards do not switch to the new action
 implicitly.
 
-No production write has been performed with this primitive. Its first physical
-canary remains a separate approval gate.
+Production physically validated both a same-value write and
+`false -> true -> false` for Fyodor's indicator through this primitive. Each
+write returned local device code 0, independent LAN reads confirmed the state,
+and fan power, mode, level, swing and off-delay were unchanged.
 
-### Physical canary candidate
+### Physical canary result
 
 For the available `dmaker.fan.p33` unit Fyodor, the cached MIoT spec exposes
 `indicator-light.on` as service 4, property 1, boolean, with read/write/notify
-access. Its current HA state is off. This is lower risk than repeating
-`fan.on=false`: it belongs to a dedicated indicator-light service and has no
-specified relationship to fan mode, speed, swing, motor control, or timers.
-
-A same-value `indicator-light.on=false` write is therefore the preferred next
-canary candidate. Firmware behavior can never be proven solely from the MIoT
-schema, so the physical write still requires explicit approval and before/after
-read-only snapshots. `fan.on` is not recommended because repeated power-state
-writes could re-run device shutdown behavior while horizontal swing is enabled.
+access. It belongs to a dedicated indicator-light service and has no specified
+relationship to fan mode, speed, swing, motor control, or timers. The physical
+canary confirmed those related properties stayed unchanged for both same-value
+and real-toggle writes. This result does not generalize to `fan.on` or other
+writable properties.
 
 ## Compatibility and security
 
@@ -153,7 +161,10 @@ data and must never be committed or placed in diagnostics.
   operators must deliberately update such filters before expecting entities.
 - The cache-first lifecycle and explicit no-op discovery refresh passed their
   production canaries at commit `2627d382`.
-- The explicit local-only write primitive is implemented and unit-tested but
-  remains un-deployed and physically unvalidated.
+- The explicit local-only write primitive is deployed and physically validated
+  for Fyodor's indicator property only.
+- The first HAOS-only network-blackhole canary on deployed commit `6cd554ba`
+  exposed the blocking cloud await fixed by this follow-up. The decoupled cold
+  start remains un-deployed until the repeat production canary succeeds.
 - A physical new-device onboarding test remains deferred until a new Xiaomi
   device is actually available.

@@ -1,6 +1,7 @@
 import logging
 import asyncio
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import Any, TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_USERNAME
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -27,6 +28,8 @@ class HassEntry:
         self.mac_to_did = {}
         self.did_to_unique = {}
         self.cloud_ready = False
+        self.cloud_bootstrap_factory: Callable[[], Coroutine[Any, Any, None]] | None = None
+        self.cloud_bootstrap_task: asyncio.Task | None = None
 
     @staticmethod
     def init(hass: HomeAssistant, entry: ConfigEntry):
@@ -37,6 +40,7 @@ class HassEntry:
         return this
 
     async def async_unload(self):
+        await self.async_cancel_cloud_bootstrap()
         ret = all(
             await asyncio.gather(
                 *[
@@ -50,6 +54,31 @@ class HassEntry:
                 await device.async_unload()
             HassEntry.ALL.pop(self.entry.entry_id, None)
         return ret
+
+    def set_cloud_bootstrap(self, factory: Callable[[], Coroutine[Any, Any, None]] | None):
+        self.cloud_bootstrap_factory = factory
+
+    def start_cloud_bootstrap(self):
+        """Start one config-entry-owned cloud task after local platform setup."""
+        if not self.cloud_bootstrap_factory:
+            return None
+        if self.cloud_bootstrap_task and not self.cloud_bootstrap_task.done():
+            self.cloud_bootstrap_task.cancel()
+        self.cloud_bootstrap_task = self.entry.async_create_background_task(
+            self.hass,
+            self.cloud_bootstrap_factory(),
+            f'{self.id} Xiaomi cloud bootstrap',
+        )
+        return self.cloud_bootstrap_task
+
+    async def async_cancel_cloud_bootstrap(self):
+        task = self.cloud_bootstrap_task
+        self.cloud_bootstrap_task = None
+        self.cloud_bootstrap_factory = None
+        if not task or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     def __getattr__(self, item):
         return getattr(self.entry, item)

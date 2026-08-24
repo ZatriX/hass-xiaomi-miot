@@ -43,6 +43,15 @@ SERVICE_TO_METHOD = {}
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     entry = HassEntry.init(hass, config_entry).new_adder(ENTITY_DOMAIN, async_add_entities)
+    await async_setup_cloud_entities(hass, entry, async_add_entities)
+    await async_setup_config_entry(hass, config_entry, async_setup_platform, async_add_entities, ENTITY_DOMAIN)
+
+
+async def async_setup_cloud_entities(hass, entry, async_add_entities=None):
+    """Create account cloud entities when background auth becomes ready."""
+    async_add_entities = async_add_entities or entry.adders.get(ENTITY_DOMAIN)
+    if not async_add_entities:
+        return
     cloud = entry.cloud
 
     if cloud and entry.cloud_ready:
@@ -66,8 +75,6 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                 await entity.coordinator.async_config_entry_first_refresh()
                 hass.data[DOMAIN]['accounts'][cloud.user_id][f'scene_history_{home_id}'] = entity
                 async_add_entities([entity], update_before_add=False)
-
-    await async_setup_config_entry(hass, config_entry, async_setup_platform, async_add_entities, ENTITY_DOMAIN)
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):

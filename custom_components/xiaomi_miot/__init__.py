@@ -60,6 +60,8 @@ from .core.templates import CUSTOM_TEMPLATES
 _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=60)
+CLOUD_BOOTSTRAP_TIMEOUT = 45
+CLOUD_BOOTSTRAP_RETRY_DELAYS = (60, 300, 900)
 
 XIAOMI_CONFIG_SCHEMA = cv.PLATFORM_SCHEMA_BASE.extend(
     {
@@ -243,13 +245,13 @@ async def async_setup(hass, hass_config: dict):
 async def async_setup_entry(hass: hass_core.HomeAssistant, config_entry: config_entries.ConfigEntry):
     hass.data.setdefault(DOMAIN, {})
     entry_id = config_entry.entry_id
+    entry = HassEntry.init(hass, config_entry)
 
     if config_entry.data.get('customizing_entity') or config_entry.data.get('customizing_device'):
         await async_setup_customizes(hass, config_entry)
     elif config_entry.data.get(CONF_USERNAME):
-        await async_setup_xiaomi_cloud(hass, config_entry)
+        await async_setup_xiaomi_cloud(hass, config_entry, defer_cloud=True)
     else:
-        entry = HassEntry.init(hass, config_entry)
         config = {**entry.get_config()}
         device = await entry.new_device(config)
         config[CONF_DEVICE] = device
@@ -270,10 +272,43 @@ async def async_setup_entry(hass: hass_core.HomeAssistant, config_entry: config_
         config_entry.add_update_listener(async_update_options)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, SUPPORTED_DOMAINS)
+    entry.start_cloud_bootstrap()
     return True
 
 
-async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: config_entries.ConfigEntry):
+async def async_cloud_bootstrap_with_retry(entry, username, loaded, bootstrap):
+    """Run bounded cloud bootstrap outside config-entry setup with backoff."""
+    attempt = 0
+    while True:
+        try:
+            async with asyncio.timeout(CLOUD_BOOTSTRAP_TIMEOUT):
+                await bootstrap()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            entry.cloud_ready = False
+            entry.cloud_devices = None
+            delay = CLOUD_BOOTSTRAP_RETRY_DELAYS[
+                min(attempt, len(CLOUD_BOOTSTRAP_RETRY_DELAYS) - 1)
+            ]
+            attempt += 1
+            _LOGGER.warning(
+                'Xiaomi cloud bootstrap unavailable for user %s; '
+                'loaded %s cached local devices; retry in %s seconds (%s)',
+                username,
+                loaded,
+                delay,
+                type(exc).__name__,
+            )
+            await asyncio.sleep(delay)
+
+
+async def async_setup_xiaomi_cloud(
+    hass: hass_core.HomeAssistant,
+    config_entry: config_entries.ConfigEntry,
+    defer_cloud=False,
+):
     entry_id = config_entry.entry_id
     entry = HassEntry.init(hass, config_entry)
     entry_config = entry.get_config()
@@ -318,6 +353,9 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
             cfg['miot_cloud'] = False
         config['configs'].append(cfg)
         loaded.add(device.unique_id)
+        if entry.adders:
+            for domain in entry.adders:
+                device.add_entities(domain)
         _LOGGER.debug(
             'Xiaomi device prepared: name=%s model=%s host=%s mode=%s cache_only=%s',
             device.name,
@@ -338,7 +376,7 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
         cloud = await entry.get_cloud(login=False)
         config[CONF_XIAOMI_CLOUD] = cloud
     except Exception as exc:  # account state must not block cached local setup
-        _LOGGER.warning('Prepare xiaomi cloud account failed: %s', exc)
+        _LOGGER.warning('Prepare xiaomi cloud account failed: %s', type(exc).__name__)
 
     for d in cached_devices.values():
         if not is_local_cache_candidate(d, MIOT_LOCAL_MODELS):
@@ -349,37 +387,69 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
             continue
         await add_device(d, cache_only=True)
 
-    devices = {}
-    if cloud:
-        try:
-            auth_ok = await cloud.async_check_auth(notify=True)
-            if not auth_ok:
-                raise MiCloudException('Xiaomi cloud authentication unavailable')
-            devices = await entry.get_cloud_devices()
-            entry.cloud_ready = True
-        except Exception as exc:  # local devices remain usable without cloud
-            entry.cloud_ready = False
-            _LOGGER.warning(
-                'Xiaomi cloud unavailable for user %s; loaded %s cached local devices: %s',
-                username,
-                len(loaded),
-                exc,
-            )
+    hass.data[DOMAIN][entry_id] = config
 
-    if entry.cloud_ready:
+    async def bootstrap_cloud():
+        nonlocal cloud
+        if not cloud:
+            cloud = await entry.get_cloud(login=False)
+            if not cloud:
+                raise MiCloudException('Xiaomi cloud account unavailable')
+            config[CONF_XIAOMI_CLOUD] = cloud
+        auth_ok = await cloud.async_check_auth(notify=True)
+        if not auth_ok:
+            raise MiCloudException('Xiaomi cloud authentication unavailable')
+        devices = await entry.get_cloud_devices()
         if not devices:
             _LOGGER.warning('None device in xiaomi cloud: %s', username)
         else:
             _LOGGER.debug('Setup xiaomi cloud for user: %s, %s devices', username, len(devices))
-    for d in devices.values():
-        info = DeviceInfo(d)
-        if info.unique_id in loaded:
-            continue
-        await add_device(d)
-
-    hass.data[DOMAIN][entry_id] = config
-    if cloud and entry.cloud_ready:
+        for d in devices.values():
+            info = DeviceInfo(d)
+            if info.unique_id in loaded:
+                continue
+            await add_device(d)
+        entry.cloud_ready = True
         hass.data[DOMAIN]['accounts'].setdefault(cloud.user_id, {CONF_XIAOMI_CLOUD: cloud})
+        if entry.adders.get('sensor'):
+            try:
+                from .sensor import async_setup_cloud_entities
+                await async_setup_cloud_entities(hass, entry)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _LOGGER.warning(
+                    'Xiaomi cloud entities unavailable for user %s (%s)',
+                    username,
+                    type(exc).__name__,
+                )
+
+    if defer_cloud and loaded:
+        entry.cloud_ready = False
+        entry.set_cloud_bootstrap(
+            lambda: async_cloud_bootstrap_with_retry(
+                entry,
+                username,
+                len(loaded),
+                bootstrap_cloud,
+            )
+        )
+        return True
+
+    try:
+        async with asyncio.timeout(CLOUD_BOOTSTRAP_TIMEOUT):
+            await bootstrap_cloud()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # no usable local cache: preserve synchronous setup semantics
+        entry.cloud_ready = False
+        entry.cloud_devices = None
+        _LOGGER.warning(
+            'Xiaomi cloud unavailable for user %s; loaded %s cached local devices (%s)',
+            username,
+            len(loaded),
+            type(exc).__name__,
+        )
     return True
 
 
