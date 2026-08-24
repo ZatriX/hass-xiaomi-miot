@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.xiaomi_miot.core.cloud_refresh import (
     CloudDiscoveryRefreshError,
@@ -319,7 +321,10 @@ async def test_service_auth_failure_never_reloads_or_clears_runtime(monkeypatch)
 
     with pytest.raises(CloudDiscoveryRefreshError, match="authentication"):
         await async_refresh_devices_service(
-            hass, SimpleNamespace(data={"config_entry_id": entry.id})
+            SimpleNamespace(
+                hass=hass,
+                data={"config_entry_id": entry.id},
+            )
         )
 
     reload_entry.assert_not_awaited()
@@ -340,7 +345,10 @@ async def test_service_noop_refresh_does_not_interrupt_runtime(monkeypatch):
     )
 
     result = await async_refresh_devices_service(
-        hass, SimpleNamespace(data={"config_entry_id": entry.id})
+        SimpleNamespace(
+            hass=hass,
+            data={"config_entry_id": entry.id},
+        )
     )
 
     assert result["unchanged"] == 1
@@ -362,10 +370,89 @@ async def test_service_reloads_once_after_successful_change(monkeypatch):
     )
 
     result = await async_refresh_devices_service(
-        hass, SimpleNamespace(data={"config_entry_id": entry.id})
+        SimpleNamespace(
+            hass=hass,
+            data={"config_entry_id": entry.id},
+        )
     )
 
     assert result["new"] == 1
     assert result["reloaded"] is True
     reload_entry.assert_awaited_once_with(entry.id)
     assert entry.cloud_devices is None
+
+
+@pytest.mark.asyncio
+async def test_registered_refresh_service_invokes_handler_with_ha_contract(
+    monkeypatch,
+    tmp_path,
+):
+    from custom_components.xiaomi_miot import (
+        DOMAIN,
+        async_setup_component_services,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    entry = FakeEntry()
+    monkeypatch.setattr(HassEntry, "ALL", {entry.id: entry})
+    monkeypatch.setattr(
+        "custom_components.xiaomi_miot.async_refresh_cloud_discovery",
+        AsyncMock(return_value=CloudDiscoveryRefreshResult(unchanged=1)),
+    )
+    await async_setup_component_services(hass)
+
+    try:
+        result = await hass.services.async_call(
+            DOMAIN,
+            "renew_devices",
+            {"config_entry_id": entry.id},
+            blocking=True,
+            return_response=True,
+        )
+    finally:
+        await hass.async_stop(force=True)
+
+    assert result["unchanged"] == 1
+    assert result["reloaded"] is False
+
+
+@pytest.mark.asyncio
+async def test_registered_refresh_service_redacts_unexpected_failure(
+    caplog,
+    monkeypatch,
+    tmp_path,
+):
+    from custom_components.xiaomi_miot import (
+        DOMAIN,
+        async_setup_component_services,
+    )
+
+    hass = HomeAssistant(str(tmp_path))
+    entry = FakeEntry()
+    secret = "token=0123456789abcdef0123456789abcdef"
+    monkeypatch.setattr(HassEntry, "ALL", {entry.id: entry})
+    monkeypatch.setattr(
+        "custom_components.xiaomi_miot.async_refresh_cloud_discovery",
+        AsyncMock(side_effect=RuntimeError(secret)),
+    )
+    await async_setup_component_services(hass)
+
+    try:
+        with pytest.raises(
+            HomeAssistantError,
+            match="existing cache remains active",
+        ) as err:
+            await hass.services.async_call(
+                DOMAIN,
+                "renew_devices",
+                {"config_entry_id": entry.id},
+                blocking=True,
+                return_response=True,
+            )
+    finally:
+        await hass.async_stop(force=True)
+
+    assert secret not in str(err.value)
+    assert secret not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert list(entry.cloud_devices) == ["old"]

@@ -270,6 +270,7 @@ async def async_refresh_cloud_discovery(
     result.unchanged += len(set(old_by_did) - fresh_dids)
 
     merged_devices = old_without_did + list(merged_by_did.values())
+    result.new_models = sorted(set(result.new_models))
     metadata = {
         **(old_payload.get("refresh_metadata") or {}),
         "schema_version": CACHE_SCHEMA_VERSION,
@@ -293,5 +294,4 @@ async def async_refresh_cloud_discovery(
             "Xiaomi discovery cache commit failed; the previous cache remains active"
         ) from None
 
-    result.new_models = sorted(set(result.new_models))
     return result

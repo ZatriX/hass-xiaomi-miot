@@ -494,8 +494,9 @@ async def async_reload_integration_config(hass, config):
     return config
 
 
-async def async_refresh_devices_service(hass, call):
+async def async_refresh_devices_service(call):
     """Refresh one explicitly selected account without coupling runtime health."""
+    hass = call.hass
     entry_id = call.data.get('config_entry_id')
     username = call.data.get('username')
     entries = list(HassEntry.ALL.values())
@@ -525,9 +526,22 @@ async def async_refresh_devices_service(hass, call):
         raise CloudDiscoveryRefreshError(
             'The selected config entry has no Xiaomi account'
         )
-    result = await async_refresh_cloud_discovery(
-        hass, cloud, MIOT_LOCAL_MODELS
-    )
+    try:
+        result = await async_refresh_cloud_discovery(
+            hass, cloud, MIOT_LOCAL_MODELS
+        )
+    except CloudDiscoveryRefreshError:
+        raise
+    except Exception as exc:
+        _LOGGER.error(
+            'Unexpected Xiaomi cloud discovery refresh failure for entry=%s: %s',
+            entry.id,
+            type(exc).__name__,
+        )
+        raise HomeAssistantError(
+            'Xiaomi cloud discovery refresh failed; '
+            'the existing cache remains active'
+        ) from None
 
     entry.cloud_devices = None
     if result.new or result.updated:
