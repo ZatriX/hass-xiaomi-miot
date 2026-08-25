@@ -335,7 +335,9 @@ class MiotSpec(MiotSpecInstance):
                     )
                 else:
                     raise ValueError('Invalid MIoT instances response')
-            except (TypeError, ValueError, BaseException) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if not cached:
                     raise exc
                 dat = cached
@@ -381,7 +383,9 @@ class MiotSpec(MiotSpecInstance):
                     raise ValueError('Invalid MIoT spec response')
                 dat['_updated_time'] = now
                 await store.async_save(dat)
-            except (TypeError, ValueError, BaseException) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if cached:
                     dat = cached
                 else:
@@ -477,7 +481,9 @@ class MiotSpec(MiotSpecInstance):
                     raise ValueError('Invalid MIoT language response')
                 dat['_updated_time'] = now
                 await store.async_save(dat)
-            except (TypeError, ValueError, BaseException) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if cached:
                     dat = cached
                 else:
@@ -509,7 +515,9 @@ class MiotSpec(MiotSpecInstance):
                 except asyncio.TimeoutError as exc:
                     exception = exc
                     _LOGGER.warning('Timeout when trying to request %s', url)
-                except BaseException as exc:
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
                     exception = exc
                     _LOGGER.warning('Got exception %s when trying to request %s', exc, url)
             tries -= 1
