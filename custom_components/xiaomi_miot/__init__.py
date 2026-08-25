@@ -628,6 +628,23 @@ async def async_refresh_devices_service(call):
         result.reloaded = bool(
             await hass.config_entries.async_reload(entry.id)
         )
+    else:
+        # A successful explicit discovery proves the account transport is
+        # usable again. Re-trigger existing cloud-only coordinators without
+        # rebuilding local devices or reloading the config entry.
+        entry.cloud_ready = True
+        if getattr(entry, 'adders', {}).get('sensor'):
+            try:
+                from .sensor import async_setup_cloud_entities
+                await async_setup_cloud_entities(hass, entry)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _LOGGER.warning(
+                    'Xiaomi cloud entity recovery deferred for entry=%s (%s)',
+                    entry.id,
+                    type(exc).__name__,
+                )
     summary = result.as_dict()
     _LOGGER.info(
         'Refreshed Xiaomi cloud discovery for entry=%s: %s',

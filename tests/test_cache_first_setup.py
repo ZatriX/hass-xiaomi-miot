@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.config_entries import ConfigEntryError
 
 from custom_components.xiaomi_miot import (
     CONF_XIAOMI_CLOUD,
@@ -306,6 +307,74 @@ async def test_cloud_eventually_returns_without_duplicate_local_setup(monkeypatc
         'yunmai.scales.ms104',
     ]
     assert entry.created[1][1].added_domains == ['button']
+
+
+@pytest.mark.asyncio
+async def test_cloud_only_coordinators_recover_without_duplicate_entities(monkeypatch):
+    """A failed first refresh must not prevent later coordinator recovery."""
+    from custom_components.xiaomi_miot import sensor as sensor_platform
+
+    class FakeCoordinator:
+        def __init__(self, cloud):
+            self.cloud = cloud
+            self.refreshes = 0
+            self.last_update_success = False
+
+        async def async_config_entry_first_refresh(self):
+            raise ConfigEntryError('cloud endpoint unavailable')
+
+        async def async_refresh(self):
+            self.refreshes += 1
+            self.last_update_success = self.cloud.features_available
+
+    class FakeMessageSensor:
+        def __init__(self, _hass, cloud):
+            self.coordinator = FakeCoordinator(cloud)
+
+    class FakeSceneSensor:
+        def __init__(self, _hass, cloud, home_id, _owner_user_id):
+            self.home_id = home_id
+            self.coordinator = FakeCoordinator(cloud)
+
+    cloud = SimpleNamespace(
+        user_id='test-user',
+        features_available=False,
+        async_get_homerooms=AsyncMock(
+            return_value=[{'id': 'home-1', 'uid': 'owner-1'}]
+        ),
+    )
+    added = []
+    add_entities = lambda entities, update_before_add=False: added.extend(entities)
+    entry = SimpleNamespace(
+        cloud=cloud,
+        cloud_ready=False,
+        adders={'sensor': add_entities},
+        get_config=lambda _key: False,
+    )
+    hass = SimpleNamespace(data={DOMAIN: {'accounts': {}}})
+    monkeypatch.setattr(sensor_platform, 'MihomeMessageSensor', FakeMessageSensor)
+    monkeypatch.setattr(sensor_platform, 'MihomeSceneHistorySensor', FakeSceneSensor)
+
+    # Cache-first startup does not wait for cloud-only entities.
+    await sensor_platform.async_setup_cloud_entities(hass, entry)
+    assert added == []
+
+    # Cloud auth/discovery returns, but both feature endpoints still fail their
+    # first refresh. The entities must nevertheless be registered unavailable.
+    entry.cloud_ready = True
+    await sensor_platform.async_setup_cloud_entities(hass, entry)
+    assert len(added) == 2
+    assert all(not entity.coordinator.last_update_success for entity in added)
+
+    # A later bootstrap/renew recovery refreshes the same coordinators. No
+    # entity is recreated and no duplicate is passed to Home Assistant.
+    original = list(added)
+    cloud.features_available = True
+    await sensor_platform.async_setup_cloud_entities(hass, entry)
+
+    assert added == original
+    assert all(entity.coordinator.last_update_success for entity in added)
+    assert all(entity.coordinator.refreshes == 2 for entity in added)
 
 
 @pytest.mark.asyncio

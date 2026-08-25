@@ -296,6 +296,8 @@ class FakeEntry:
         self.id = "entry-1"
         self.cloud_devices = {"old": object()}
         self.cloud = object()
+        self.cloud_ready = False
+        self.adders = {}
 
     def get_config(self, key=None):
         data = {"user_id": "test-user", "username": "account"}
@@ -353,6 +355,39 @@ async def test_service_noop_refresh_does_not_interrupt_runtime(monkeypatch):
 
     assert result["unchanged"] == 1
     assert result["reloaded"] is False
+    reload_entry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_noop_refresh_retriggers_cloud_coordinators(monkeypatch):
+    from custom_components.xiaomi_miot import async_refresh_devices_service
+
+    entry = FakeEntry()
+    entry.adders['sensor'] = object()
+    monkeypatch.setattr(HassEntry, "ALL", {entry.id: entry})
+    reload_entry = AsyncMock()
+    recover = AsyncMock()
+    hass = SimpleNamespace(config_entries=SimpleNamespace(async_reload=reload_entry))
+    monkeypatch.setattr(
+        "custom_components.xiaomi_miot.async_refresh_cloud_discovery",
+        AsyncMock(return_value=CloudDiscoveryRefreshResult(unchanged=1)),
+    )
+    monkeypatch.setattr(
+        "custom_components.xiaomi_miot.sensor.async_setup_cloud_entities",
+        recover,
+    )
+
+    result = await async_refresh_devices_service(
+        SimpleNamespace(
+            hass=hass,
+            data={"config_entry_id": entry.id},
+        )
+    )
+
+    assert result["unchanged"] == 1
+    assert result["reloaded"] is False
+    assert entry.cloud_ready is True
+    recover.assert_awaited_once_with(hass, entry)
     reload_entry.assert_not_awaited()
 
 
