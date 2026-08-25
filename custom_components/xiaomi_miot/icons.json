@@ -48,6 +48,9 @@
     "renew_devices": {
       "service": "mdi:autorenew"
     },
+    "retry_cloud": {
+      "service": "mdi:cloud-refresh"
+    },
     "request_xiaomi_api": {
       "service": "mdi:cloud"
     }

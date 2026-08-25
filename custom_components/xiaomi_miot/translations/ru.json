@@ -123,10 +123,15 @@
     "system_health": {
         "info": {
             "component_version": "Версия компонента",
-            "can_reach_server": "Доступность API сервера Сяоми",
-            "can_reach_spec": "Доступность MIoT-Spec сервера",
-            "logged_accounts": "Авторизованные аккаунты",
-            "total_devices": "Общее количество устройств MiHome"
+            "config_entries": "Загруженные записи конфигурации",
+            "runtime_status": "Состояние Xiaomi runtime",
+            "local_configured_devices": "Настроенные локальные устройства",
+            "local_reachable_devices": "Доступные локальные устройства",
+            "local_unavailable_devices": "Недоступные локальные устройства",
+            "cloud_only_devices": "Только облачные устройства",
+            "cloud_ready_entries": "Записи с доступным Xiaomi Cloud",
+            "bootstrap_state": "Состояние фонового подключения к облаку",
+            "last_successful_cache_refresh": "Последнее успешное обновление discovery cache"
         }
     }
 }

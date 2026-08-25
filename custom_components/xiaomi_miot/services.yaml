@@ -302,6 +302,18 @@ renew_devices:
       selector:
         text:
 
+retry_cloud:
+  name: Retry Xiaomi cloud connection
+  description: Request an immediate background cloud retry without reloading local devices.
+  fields:
+    config_entry_id:
+      name: Config entry
+      description: Xiaomi Miot account config entry whose background cloud task should retry.
+      required: true
+      selector:
+        config_entry:
+          integration: xiaomi_miot
+
 get_bindkey:
   description: Get bindkey for ble device from cloud.
   fields:

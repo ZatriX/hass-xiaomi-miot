@@ -280,11 +280,21 @@ async def async_cloud_bootstrap_with_retry(entry, username, loaded, bootstrap):
     """Run bounded cloud bootstrap outside config-entry setup with backoff."""
     attempt = 0
     while True:
+        status = getattr(entry, 'cloud_bootstrap_status', None)
+        retry_event = getattr(entry, 'cloud_retry_event', None)
+        if retry_event:
+            retry_event.clear()
+        if status:
+            status.attempt_started()
         try:
             async with asyncio.timeout(CLOUD_BOOTSTRAP_TIMEOUT):
                 await bootstrap()
+            if status:
+                status.succeeded()
             return
         except asyncio.CancelledError:
+            if status:
+                status.stopped(cancelled=True)
             raise
         except Exception as exc:
             entry.cloud_ready = False
@@ -293,6 +303,9 @@ async def async_cloud_bootstrap_with_retry(entry, username, loaded, bootstrap):
                 min(attempt, len(CLOUD_BOOTSTRAP_RETRY_DELAYS) - 1)
             ]
             attempt += 1
+            if status:
+                status.retry_level = attempt
+                status.failed(exc, delay)
             _LOGGER.warning(
                 'Xiaomi cloud bootstrap unavailable for user %s; '
                 'loaded %s cached local devices; retry in %s seconds (%s)',
@@ -301,7 +314,21 @@ async def async_cloud_bootstrap_with_retry(entry, username, loaded, bootstrap):
                 delay,
                 type(exc).__name__,
             )
-            await asyncio.sleep(delay)
+            if retry_event:
+                retry_requested = False
+                try:
+                    await asyncio.wait_for(retry_event.wait(), timeout=delay)
+                    retry_requested = True
+                except TimeoutError:
+                    pass
+                finally:
+                    retry_event.clear()
+                if retry_requested and entry.cloud_ready:
+                    if status:
+                        status.succeeded()
+                    return
+            else:
+                await asyncio.sleep(delay)
 
 
 async def async_setup_xiaomi_cloud(
@@ -371,6 +398,16 @@ async def async_setup_xiaomi_cloud(
         cached_devices = {}
         _LOGGER.warning('Load cached xiaomi devices failed: %s', exc)
 
+    cached_local_devices = sum(
+        is_local_cache_candidate(device, MIOT_LOCAL_MODELS)
+        for device in cached_devices.values()
+    )
+    entry.local_cache_usable = bool(cached_local_devices)
+    entry.cached_local_devices = cached_local_devices
+    entry.cached_cloud_only_devices = max(
+        0, len(cached_devices) - cached_local_devices
+    )
+
     cloud = None
     try:
         cloud = await entry.get_cloud(login=False)
@@ -399,7 +436,11 @@ async def async_setup_xiaomi_cloud(
         auth_ok = await cloud.async_check_auth(notify=True)
         if not auth_ok:
             raise MiCloudException('Xiaomi cloud authentication unavailable')
+        if status := getattr(entry, 'cloud_bootstrap_status', None):
+            status.auth_succeeded()
         devices = await entry.get_cloud_devices()
+        if status:
+            status.discovery_succeeded()
         if not devices:
             _LOGGER.warning('None device in xiaomi cloud: %s', username)
         else:
@@ -601,6 +642,7 @@ async def async_refresh_devices_service(call):
         )
 
     entry = entries[0]
+    cloud_status = getattr(entry, 'cloud_bootstrap_status', None)
     cloud = await entry.get_cloud(login=False)
     if not cloud:
         raise CloudDiscoveryRefreshError(
@@ -610,9 +652,13 @@ async def async_refresh_devices_service(call):
         result = await async_refresh_cloud_discovery(
             hass, cloud, MIOT_LOCAL_MODELS
         )
-    except CloudDiscoveryRefreshError:
+    except CloudDiscoveryRefreshError as exc:
+        if cloud_status:
+            cloud_status.observed_failure(exc, 'discovery')
         raise
     except Exception as exc:
+        if cloud_status:
+            cloud_status.observed_failure(exc, 'discovery')
         _LOGGER.error(
             'Unexpected Xiaomi cloud discovery refresh failure for entry=%s: %s',
             entry.id,
@@ -624,6 +670,9 @@ async def async_refresh_devices_service(call):
         ) from None
 
     entry.cloud_devices = None
+    if cloud_status:
+        cloud_status.auth_succeeded()
+        cloud_status.discovery_succeeded()
     if result.new or result.updated:
         result.reloaded = bool(
             await hass.config_entries.async_reload(entry.id)
@@ -633,6 +682,10 @@ async def async_refresh_devices_service(call):
         # usable again. Re-trigger existing cloud-only coordinators without
         # rebuilding local devices or reloading the config entry.
         entry.cloud_ready = True
+        if cloud_status:
+            cloud_status.succeeded()
+        if retry_event := getattr(entry, 'cloud_retry_event', None):
+            retry_event.set()
         if getattr(entry, 'adders', {}).get('sensor'):
             try:
                 from .sensor import async_setup_cloud_entities
@@ -654,6 +707,24 @@ async def async_refresh_devices_service(call):
     return summary
 
 
+async def async_retry_cloud_service(call):
+    """Request one immediate config-entry-owned cloud bootstrap attempt."""
+    entry_id = call.data.get('config_entry_id')
+    entry = HassEntry.ALL.get(entry_id)
+    if not entry:
+        return {
+            'status': 'failed',
+            'cloud_ready': False,
+            'bootstrap_state': 'stopped',
+        }
+    status = entry.request_cloud_retry()
+    return {
+        'status': status,
+        'cloud_ready': bool(entry.cloud_ready),
+        'bootstrap_state': entry.cloud_bootstrap_status.state,
+    }
+
+
 async def async_setup_component_services(hass):
 
     kws = {}
@@ -665,6 +736,14 @@ async def async_setup_component_services(hass):
             vol.Exclusive('config_entry_id', 'scope'): cv.string,
             # Backward-compatible account scope for existing service callers.
             vol.Exclusive('username', 'scope'): cv.string,
+        }),
+        **kws,
+    )
+
+    async_register_admin_service(
+        hass, DOMAIN, 'retry_cloud', async_retry_cloud_service,
+        schema=vol.Schema({
+            vol.Required('config_entry_id'): cv.string,
         }),
         **kws,
     )

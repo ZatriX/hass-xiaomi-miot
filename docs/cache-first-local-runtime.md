@@ -105,6 +105,63 @@ procedure rather than a startup dependency:
 
 The integration does not control DNS, routing, or firewall state.
 
+## Operational status and cloud controls
+
+The fork exposes current integration health through standard Home Assistant
+surfaces without adding technical entities or additional device polling:
+
+- **Settings -> Devices & services -> Xiaomi Miot -> Diagnostics** downloads a
+  redacted config-entry report with runtime, cloud-bootstrap, cache provenance,
+  and per-device transport/reachability facts;
+- **Settings -> System -> Repairs -> System information** provides a quick
+  Xiaomi Miot System Health summary built from the same existing runtime state;
+- **Retry Xiaomi cloud connection** (`xiaomi_miot.retry_cloud`) requests an
+  immediate config-entry-owned cloud bootstrap attempt;
+- **Refresh devices from Xiaomi cloud** (`xiaomi_miot.renew_devices`) retains
+  its conservative discovery/cache merge behavior and safe count response.
+
+The runtime status is deterministic:
+
+- `local_and_cloud`: a healthy local runtime, Xiaomi cloud ready, and no known
+  cloud-only component failure;
+- `local_only`: a healthy local runtime while Xiaomi cloud is unavailable;
+- `cloud_only`: no configured local runtime, but the cloud path is ready;
+- `degraded`: the integration remains usable but a known component is partial,
+  such as cloud-ready local devices alongside unavailable cloud-only Glafira;
+- `unavailable`: neither a usable local runtime nor a ready cloud path exists.
+
+An individual long-offline local device such as Fedul is counted as unavailable
+but does not by itself change a healthy integration to `degraded`. Glafira
+(`yunmai.scales.ms104`) remains cloud-only; its missing cached spec or unavailable
+cloud entity is reported as partial cloud degradation and never disables the
+local household devices.
+
+The cloud bootstrap state is `idle`, `running`, `backoff`, `ready`, or `stopped`.
+Diagnostics includes attempt counts, safe success/failure timestamps, next
+retry time, retry level, and only a normalized failure class (`auth_failed`,
+`network_unreachable`, `timeout`, `discovery_failed`, `spec_failed`, `cancelled`,
+or `unknown`). Exception messages and cloud response payloads are not retained.
+
+Manual retry is administrator-only and scoped by `config_entry_id`. It never
+reloads the integration or local devices. If bootstrap is running, it returns
+`already_running`; during backoff it wakes the owned task for an immediate
+attempt; when idle or completed it starts exactly one owned task. Its response
+contains only `status`, `cloud_ready`, and `bootstrap_state`.
+
+For normal household observation:
+
+1. check Xiaomi Miot System Health for runtime status and local device counts;
+2. download Diagnostics when cache provenance or retry timing is needed;
+3. confirm local devices remain responsive in their existing dashboard cards;
+4. use **Refresh devices from Xiaomi cloud** only for explicit discovery or
+   onboarding;
+5. use **Retry Xiaomi cloud connection** when cloud recovery should be attempted
+   before the scheduled backoff expires.
+
+No automation reloads or restarts the integration. Xiaomi egress remains
+normally allowed; the HomeShield Xiaomi Canary profile is only for separately
+approved controlled tests.
+
 ## Explicit local-only property write
 
 The `xiaomi_miot.set_miot_property_local` action is a separate, fail-closed
@@ -163,8 +220,10 @@ data and must never be committed or placed in diagnostics.
   production canaries at commit `2627d382`.
 - The explicit local-only write primitive is deployed and physically validated
   for Fyodor's indicator property only.
-- The first HAOS-only network-blackhole canary on deployed commit `6cd554ba`
-  exposed the blocking cloud await fixed by this follow-up. The decoupled cold
-  start remains un-deployed until the repeat production canary succeeds.
+- Cache-first cold start, bounded cancellation, local reads and writes, explicit
+  refresh, and background cloud/coordinator recovery have been physically
+  validated through commit `484fa177`.
+- Operational diagnostics and cloud controls are not production-validated until
+  their separate rollout gate completes.
 - A physical new-device onboarding test remains deferred until a new Xiaomi
   device is actually available.

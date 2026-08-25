@@ -7,6 +7,7 @@ from homeassistant.const import CONF_USERNAME
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import SUPPORTED_DOMAINS
+from .runtime_status import CloudBootstrapStatus, runtime_snapshot
 from .xiaomi_cloud import MiotCloud
 
 if TYPE_CHECKING:
@@ -30,6 +31,11 @@ class HassEntry:
         self.cloud_ready = False
         self.cloud_bootstrap_factory: Callable[[], Coroutine[Any, Any, None]] | None = None
         self.cloud_bootstrap_task: asyncio.Task | None = None
+        self.cloud_retry_event = asyncio.Event()
+        self.cloud_bootstrap_status = CloudBootstrapStatus()
+        self.local_cache_usable = False
+        self.cached_local_devices = 0
+        self.cached_cloud_only_devices = 0
 
     @staticmethod
     def init(hass: HomeAssistant, entry: ConfigEntry):
@@ -71,14 +77,33 @@ class HassEntry:
         )
         return self.cloud_bootstrap_task
 
+    def request_cloud_retry(self) -> str:
+        """Request an immediate retry without creating a duplicate task."""
+        task = self.cloud_bootstrap_task
+        if task and not task.done():
+            if self.cloud_bootstrap_status.state == 'backoff':
+                self.cloud_retry_event.set()
+                return 'started'
+            return 'already_running'
+        if not self.cloud_bootstrap_factory:
+            return 'failed'
+        self.start_cloud_bootstrap()
+        return 'started'
+
     async def async_cancel_cloud_bootstrap(self):
         task = self.cloud_bootstrap_task
         self.cloud_bootstrap_task = None
         self.cloud_bootstrap_factory = None
         if not task or task.done():
+            self.cloud_bootstrap_status.stopped()
             return
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        self.cloud_bootstrap_status.stopped(cancelled=True)
+
+    def runtime_snapshot(self):
+        """Return the safe, non-polling operational snapshot."""
+        return runtime_snapshot(self)
 
     def __getattr__(self, item):
         return getattr(self.entry, item)

@@ -207,10 +207,15 @@
     "system_health": {
         "info": {
             "component_version": "Custom component version",
-            "can_reach_server": "Reach Xiaomi API server",
-            "can_reach_spec": "Reach MIoT-Spec Server",
-            "logged_accounts": "Number of logged-in accounts",
-            "total_devices": "Total number of MiHome devices"
+            "config_entries": "Loaded config entries",
+            "runtime_status": "Runtime status",
+            "local_configured_devices": "Configured local devices",
+            "local_reachable_devices": "Reachable local devices",
+            "local_unavailable_devices": "Unavailable local devices",
+            "cloud_only_devices": "Cloud-only devices",
+            "cloud_ready_entries": "Cloud-ready config entries",
+            "bootstrap_state": "Background cloud bootstrap state",
+            "last_successful_cache_refresh": "Last successful discovery cache refresh"
         }
     },
     "entity": {

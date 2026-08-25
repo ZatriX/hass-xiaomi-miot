@@ -15,6 +15,7 @@ from .local_cache import (
     is_local_cache_candidate,
 )
 from .miot_spec import MiotSpec
+from .runtime_status import classify_cloud_error
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +26,10 @@ INTEGRATION_VERSION = "1.1.4"
 
 class CloudDiscoveryRefreshError(HomeAssistantError):
     """Raised when explicit discovery refresh cannot safely commit."""
+
+    def __init__(self, message: str, safe_code: str = "discovery_failed"):
+        super().__init__(message)
+        self.safe_code = safe_code
 
 
 @dataclass
@@ -133,22 +138,25 @@ async def async_refresh_cloud_discovery(
     try:
         if not await cloud.async_check_auth(notify=False):
             raise CloudDiscoveryRefreshError(
-                "Xiaomi account authentication is unavailable"
+                "Xiaomi account authentication is unavailable",
+                "auth_failed",
             )
     except CloudDiscoveryRefreshError:
         raise
-    except Exception:
+    except Exception as exc:
         raise CloudDiscoveryRefreshError(
-            "Xiaomi account authentication failed"
+            "Xiaomi account authentication failed",
+            classify_cloud_error(exc, "auth"),
         ) from None
 
     old_payload = await cloud.async_load_device_cache_payload()
     old_devices = old_payload.get("devices") or []
     try:
         fresh_payload = await cloud.async_discover_devices()
-    except Exception:
+    except Exception as exc:
         raise CloudDiscoveryRefreshError(
-            "Xiaomi cloud discovery failed; the existing cache was not changed"
+            "Xiaomi cloud discovery failed; the existing cache was not changed",
+            classify_cloud_error(exc, "discovery"),
         ) from None
 
     if not isinstance(fresh_payload, dict):
