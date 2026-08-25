@@ -162,6 +162,40 @@ No automation reloads or restarts the integration. Xiaomi egress remains
 normally allowed; the HomeShield Xiaomi Canary profile is only for separately
 approved controlled tests.
 
+### Diagnostics and refresh acceptance procedure
+
+Config-entry Diagnostics uses Home Assistant's standard administrator flow.
+From an authenticated owner session, open **Settings -> Devices & services ->
+Xiaomi Miot**, open the config-entry menu, and select **Download diagnostics**.
+The frontend obtains a short-lived signed path and downloads
+`/api/diagnostics/config_entry/<config_entry_id>`; the underlying endpoint is
+administrator-only. Do not create a long-lived API token or weaken that check.
+
+For a controlled discovery-refresh acceptance test, make exactly one call:
+
+```yaml
+action: xiaomi_miot.renew_devices
+data:
+  config_entry_id: <current config entry id>
+```
+
+Before pressing **Perform action**, record the wall-clock timestamp and the
+`last_successful_refresh` cache-provenance value from a Diagnostics download.
+Keep the Developer Tools Actions page open until it reports either **Response**
+or an error. A successful response-capable call displays the complete safe
+summary; absence of a response is a failed acceptance gate and is not a reason
+to call the action again. Download Diagnostics once more afterward and verify
+that `last_successful_refresh` advanced even when all discovered device records
+were unchanged. Record the returned summary, whether `new` or `updated` is
+non-zero, and whether `reloaded` is true. A no-op household refresh normally
+reports `discovered: 8`, `new: 0`, `updated: 0`, `unchanged: 8`, and
+`reloaded: false`; one failed cloud-only Glafira candidate is acceptable.
+
+Inspect the downloaded JSON without copying secrets into logs or source files.
+It must contain the safe runtime, cache, and cloud-bootstrap sections and must
+not contain local device tokens, Xiaomi password/auth data, cookies,
+`ssecurity`, account identifiers, or raw Xiaomi responses.
+
 ## Explicit local-only property write
 
 The `xiaomi_miot.set_miot_property_local` action is a separate, fail-closed

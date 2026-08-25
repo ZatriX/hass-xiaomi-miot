@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.xiaomi_miot.core.cloud_refresh import (
@@ -429,26 +429,58 @@ async def test_registered_refresh_service_invokes_handler_with_ha_contract(
 
     hass = HomeAssistant(str(tmp_path))
     entry = FakeEntry()
+    owner_id = "owner-1"
+    hass.auth = SimpleNamespace(
+        async_get_user=AsyncMock(
+            return_value=SimpleNamespace(id=owner_id, is_admin=True)
+        )
+    )
     monkeypatch.setattr(HassEntry, "ALL", {entry.id: entry})
+    refresh = AsyncMock(
+        return_value=CloudDiscoveryRefreshResult(
+            discovered=8,
+            unchanged=8,
+            failed=1,
+        )
+    )
     monkeypatch.setattr(
         "custom_components.xiaomi_miot.async_refresh_cloud_discovery",
-        AsyncMock(return_value=CloudDiscoveryRefreshResult(unchanged=1)),
+        refresh,
     )
     await async_setup_component_services(hass)
 
     try:
+        assert (
+            hass.services.supports_response(DOMAIN, "renew_devices")
+            is SupportsResponse.OPTIONAL
+        )
         result = await hass.services.async_call(
             DOMAIN,
             "renew_devices",
             {"config_entry_id": entry.id},
             blocking=True,
+            context=Context(user_id=owner_id),
             return_response=True,
         )
     finally:
         await hass.async_stop(force=True)
 
-    assert result["unchanged"] == 1
-    assert result["reloaded"] is False
+    assert result == {
+        "discovered": 8,
+        "new": 0,
+        "updated": 0,
+        "unchanged": 8,
+        "local_capable_new": 0,
+        "cloud_only_new": 0,
+        "failed": 1,
+        "new_models": [],
+        "reloaded": False,
+    }
+    refresh.assert_awaited_once()
+    refresh_hass, refresh_cloud, refresh_local_models = refresh.await_args.args
+    assert refresh_hass is hass
+    assert refresh_cloud is entry.cloud
+    assert LOCAL_MODEL in refresh_local_models
 
 
 @pytest.mark.asyncio
