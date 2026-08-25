@@ -72,6 +72,15 @@
     },
     "options": {
         "step": {
+            "init": {
+                "title": "Xiaomi Miot",
+                "description": "Выберите операцию с аккаунтом.",
+                "menu_options": {
+                    "cloud": "Настроить аккаунт Xiaomi Cloud",
+                    "refresh_devices": "Обновить устройства из Xiaomi Cloud",
+                    "retry_cloud": "Повторить подключение к Xiaomi Cloud"
+                }
+            },
             "user": {
                 "title": "Xiaomi Miot",
                 "description": "Конфигурация устройства.",
@@ -109,6 +118,9 @@
                 }
             }
         },
+        "progress": {
+            "refresh_devices": "Обновление устройств из Xiaomi Cloud"
+        },
         "error": {
             "cannot_connect": "Не удалость подключиться к устройству",
             "cannot_login": "Не удалось полключиться к аккаунту Сяоми. Проверьте пароль. При повторных ошибках авторизируйтесь на mi.com в той же среде и попробуйте снова.",
@@ -117,7 +129,13 @@
             "none_devices": "Не найдено устройств в облаке Сяоми"
         },
         "abort": {
-            "show_customizes": "[Add a new integration](/_my_redirect/config_flow_start?domain=xiaomi_miot) to modify customization.\n{link}\n{tip}"
+            "show_customizes": "[Add a new integration](/_my_redirect/config_flow_start?domain=xiaomi_miot) to modify customization.\n{link}\n{tip}",
+            "refresh_complete": "Обновление устройств завершено. Новых: {new}; обновлено: {updated}; без изменений: {unchanged}; ошибок: {failed}; интеграция перезагружена: {reloaded}.",
+            "refresh_failed": "Не удалось обновить устройства. Существующий cache и локальный runtime продолжают работать.",
+            "retry_started": "Повторное подключение к Xiaomi Cloud запущено. Состояние bootstrap: {bootstrap_state}.",
+            "retry_already_running": "Подключение к Xiaomi Cloud уже выполняется. Состояние bootstrap: {bootstrap_state}.",
+            "retry_already_ready": "Xiaomi Cloud уже подключён и готов к работе.",
+            "retry_failed": "Не удалось запустить подключение к Xiaomi Cloud. Локальный runtime продолжает работать."
         }
     },
     "system_health": {

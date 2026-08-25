@@ -145,6 +145,15 @@
     },
     "options": {
         "step": {
+            "init": {
+                "title": "Xiaomi Miot",
+                "description": "Choose an account operation.",
+                "menu_options": {
+                    "cloud": "Configure Xiaomi cloud account",
+                    "refresh_devices": "Refresh devices from Xiaomi cloud",
+                    "retry_cloud": "Retry Xiaomi cloud connection"
+                }
+            },
             "user": {
                 "title": "Xiaomi Miot",
                 "description": "Config device info.",
@@ -192,6 +201,9 @@
                 }
             }
         },
+        "progress": {
+            "refresh_devices": "Refreshing devices from Xiaomi cloud"
+        },
         "error": {
             "cannot_connect": "Failed to connect to the device",
             "cannot_login": "Failed to login to the Xiaomi account. Please check your account credentials. If login attempts fail multiple times, please try logging in again on the Xiaomi official website (mi.com) using the same network environment.",
@@ -201,7 +213,13 @@
             "need_verify": "This login requires security verification. Please open the verification page to send the mobile/email verification code. After receiving the verification code, do not verify it on the webpage. Go back to HomeAssistant and enter it in the input box below."
         },
         "abort": {
-            "show_customizes": "Add a new integration to modify customization.\n{link}\n{tip}"
+            "show_customizes": "Add a new integration to modify customization.\n{link}\n{tip}",
+            "refresh_complete": "Device refresh completed. New: {new}; updated: {updated}; unchanged: {unchanged}; failed: {failed}; integration reloaded: {reloaded}.",
+            "refresh_failed": "Device refresh failed. The existing cache and local runtime remain active.",
+            "retry_started": "Xiaomi cloud retry started. Bootstrap state: {bootstrap_state}.",
+            "retry_already_running": "A Xiaomi cloud connection attempt is already running. Bootstrap state: {bootstrap_state}.",
+            "retry_already_ready": "Xiaomi cloud is already connected and ready.",
+            "retry_failed": "Xiaomi cloud retry could not be started. The local runtime remains active."
         }
     },
     "system_health": {

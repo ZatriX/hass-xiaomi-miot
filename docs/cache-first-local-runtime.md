@@ -115,10 +115,12 @@ surfaces without adding technical entities or additional device polling:
   and per-device transport/reachability facts;
 - **Settings -> System -> Repairs -> System information** provides a quick
   Xiaomi Miot System Health summary built from the same existing runtime state;
-- **Retry Xiaomi cloud connection** (`xiaomi_miot.retry_cloud`) requests an
-  immediate config-entry-owned cloud bootstrap attempt;
-- **Refresh devices from Xiaomi cloud** (`xiaomi_miot.renew_devices`) retains
-  its conservative discovery/cache merge behavior and safe count response.
+- the config entry's **Configure** button opens a standard Home Assistant
+  options menu with **Refresh devices from Xiaomi cloud**, **Retry Xiaomi cloud
+  connection**, and the existing account configuration;
+- the two options-menu actions are scoped to that config entry automatically,
+  call the existing `xiaomi_miot.renew_devices` and
+  `xiaomi_miot.retry_cloud` services, and present safe completion feedback.
 
 The runtime status is deterministic:
 
@@ -153,10 +155,10 @@ For normal household observation:
 1. check Xiaomi Miot System Health for runtime status and local device counts;
 2. download Diagnostics when cache provenance or retry timing is needed;
 3. confirm local devices remain responsive in their existing dashboard cards;
-4. use **Refresh devices from Xiaomi cloud** only for explicit discovery or
-   onboarding;
-5. use **Retry Xiaomi cloud connection** when cloud recovery should be attempted
-   before the scheduled backoff expires.
+4. open the Xiaomi Miot config entry's **Configure** menu and use **Refresh
+   devices from Xiaomi cloud** only for explicit discovery or onboarding;
+5. use **Retry Xiaomi cloud connection** in the same menu when cloud recovery
+   should be attempted before the scheduled backoff expires.
 
 No automation reloads or restarts the integration. Xiaomi egress remains
 normally allowed; the HomeShield Xiaomi Canary profile is only for separately
@@ -171,30 +173,31 @@ The frontend obtains a short-lived signed path and downloads
 `/api/diagnostics/config_entry/<config_entry_id>`; the underlying endpoint is
 administrator-only. Do not create a long-lived API token or weaken that check.
 
-For a controlled discovery-refresh acceptance test, make exactly one call:
-
-```yaml
-action: xiaomi_miot.renew_devices
-data:
-  config_entry_id: <current config entry id>
-```
-
-Before pressing **Perform action**, record the wall-clock timestamp and the
-`last_successful_refresh` cache-provenance value from a Diagnostics download.
-Keep the Developer Tools Actions page open until it reports either **Response**
-or an error. A successful response-capable call displays the complete safe
-summary; absence of a response is a failed acceptance gate and is not a reason
-to call the action again. Download Diagnostics once more afterward and verify
-that `last_successful_refresh` advanced even when all discovered device records
-were unchanged. Record the returned summary, whether `new` or `updated` is
-non-zero, and whether `reloaded` is true. A no-op household refresh normally
-reports `discovered: 8`, `new: 0`, `updated: 0`, `unchanged: 8`, and
-`reloaded: false`; one failed cloud-only Glafira candidate is acceptable.
+For a controlled discovery-refresh acceptance test, record the wall-clock
+timestamp and `last_successful_refresh` from Diagnostics, open the config
+entry's **Configure** menu, and select **Refresh devices from Xiaomi cloud**
+exactly once. The native progress dialog waits for the existing response-capable
+backend service and then reports new, updated, unchanged, failed, and reload
+counts. Download Diagnostics once more and verify that
+`last_successful_refresh` advanced even when all device records were unchanged.
+A no-op household refresh normally reports `new: 0`, `updated: 0`,
+`unchanged: 8`, and `reloaded: false`; one failed cloud-only Glafira candidate
+is acceptable.
 
 Inspect the downloaded JSON without copying secrets into logs or source files.
 It must contain the safe runtime, cache, and cloud-bootstrap sections and must
 not contain local device tokens, Xiaomi password/auth data, cookies,
 `ssecurity`, account identifiers, or raw Xiaomi responses.
+
+Home Assistant 2026.8.3 does not expose an integration-defined extension point
+for adding custom items to the config-entry overflow menu, so cloud controls use
+the standard admin-only Options Flow behind **Configure**. Diagnostics remains
+the standard **Download diagnostics** item in the overflow menu. The integration
+keeps `iot_class: cloud_polling`: Home Assistant has no hybrid/local-first IoT
+class, and cloud-only entities plus explicit discovery really do use Xiaomi
+Cloud. Consequently the coarse **Requires Internet** badge remains visible even
+though validated cached local devices can start, poll, and use the strict local
+write path without internet access.
 
 ## Explicit local-only property write
 
@@ -257,7 +260,7 @@ data and must never be committed or placed in diagnostics.
 - Cache-first cold start, bounded cancellation, local reads and writes, explicit
   refresh, and background cloud/coordinator recovery have been physically
   validated through commit `484fa177`.
-- Operational diagnostics and cloud controls are not production-validated until
-  their separate rollout gate completes.
+- The Configure-menu operational controls are not production-validated until
+  their separate visual rollout gate completes.
 - A physical new-device onboarding test remains deferred until a new Xiaomi
   device is actually available.
