@@ -16,6 +16,7 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import callback, split_entity_id
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import yaml
 from homeassistant.components import persistent_notification
 from homeassistant.helpers import config_validation as cv
@@ -39,7 +40,14 @@ from .core.utils import (
     in_china,
     async_analytics_track_event,
 )
-from .core.const import SUPPORTED_DOMAINS, CLOUD_SERVERS, CONF_XIAOMI_CLOUD, HA_VERSION
+from .core.const import (
+    SUPPORTED_DOMAINS,
+    CLOUD_SERVERS,
+    CONF_XIAOMI_CLOUD,
+    HA_VERSION,
+    MIOT_LOCAL_MODELS,
+)
+from .core.cloud_refresh import async_refresh_cloud_discovery
 from .core.device import MiioInfo
 from .core.miot_spec import MiotSpec
 from .core.mini_miio import AsyncMiIO
@@ -77,11 +85,12 @@ async def check_miio_device(hass, user_input, errors):
         device = None
         info = None
         errors['base'] = 'cannot_connect'
-    _LOGGER.debug('Xiaomi Miot config flow: %s', {
-        'user_input': user_input,
-        'miio_info': info,
-        'errors': errors,
-    })
+    _LOGGER.debug(
+        'Xiaomi Miot config flow: host=%s model=%s errors=%s',
+        host,
+        getattr(info, 'model', None),
+        errors,
+    )
     model = ''
     if info is not None:
         if not user_input.get(CONF_MODEL):
@@ -158,9 +167,13 @@ class BaseFlowHandler:
         mic = None
         try:
             mic = await self.get_cloud(user_input)
-            dvs = await mic.async_get_devices(renew=renew_devices) or []
             if renew_devices:
-                await MiotSpec.async_get_model_type(self.hass, 'xiaomi.miot.auto', use_remote=True)
+                await async_refresh_cloud_discovery(
+                    self.hass, mic, MIOT_LOCAL_MODELS
+                )
+                dvs = await mic.async_get_cached_devices() or []
+            else:
+                dvs = await mic.async_get_devices() or []
             self.context.pop('captchaIck', None)
         except (MiCloudException, MiCloudAccessDenied, Exception) as exc:
             err = f'{exc}'
@@ -402,7 +415,7 @@ class XiaomiMiotFlowHandler(config_entries.ConfigFlow, BaseFlowHandler, domain=D
                 'filter_models': self.filter_models,
                 CONF_CONFIG_VERSION: ENTRY_VERSION,
             })
-            _LOGGER.debug('Setup xiaomi cloud: %s', {**self.config_data, CONF_PASSWORD: '*', 'service_token': '*'})
+            _LOGGER.debug('Setup xiaomi cloud: keys=%s', sorted(self.config_data))
             return self.async_create_entry(
                 title=f"Xiaomi: {self.config_data.get('user_id')}",
                 data=self.config_data,
@@ -626,6 +639,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
     def __init__(self, config_entry: config_entries.ConfigEntry):
         if HA_VERSION < '2024.12':
             self.config_entry = config_entry
+        self._refresh_task = None
+        self._refresh_result = None
+        self._refresh_failure_class = None
 
     @property
     def saved_config(self):
@@ -651,7 +667,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         data = self.config_entry.data
         if CONF_USERNAME in data:
             self.config_data = self.saved_config
-            return await self.async_step_cloud()
+            return self.async_show_menu(
+                step_id='init',
+                menu_options=[
+                    'cloud',
+                    'refresh_devices',
+                    'retry_cloud',
+                ],
+            )
 
         if 'customizing_entity' in data or 'customizing_device' in data:
             return self.async_abort(
@@ -663,6 +686,124 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             )
 
         return await self.async_step_user()
+
+    async def _async_call_entry_service(self, service):
+        """Call an existing response-capable service for this config entry."""
+        return await self.hass.services.async_call(
+            DOMAIN,
+            service,
+            {'config_entry_id': self.config_entry.entry_id},
+            blocking=True,
+            return_response=True,
+        )
+
+    async def async_step_refresh_devices(self, user_input=None):
+        """Refresh Xiaomi discovery through the existing backend service."""
+        if self._refresh_task and self._refresh_task.done():
+            try:
+                self._refresh_result = self._refresh_task.result()
+            except HomeAssistantError as exc:
+                self._refresh_failure_class = type(exc).__name__
+                _LOGGER.warning(
+                    'Xiaomi UI discovery refresh failed for entry=%s (%s)',
+                    self.config_entry.entry_id,
+                    self._refresh_failure_class,
+                )
+                return self.async_show_progress_done(
+                    next_step_id='refresh_failed'
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._refresh_failure_class = type(exc).__name__
+                _LOGGER.warning(
+                    'Unexpected Xiaomi UI discovery refresh failure for '
+                    'entry=%s (%s)',
+                    self.config_entry.entry_id,
+                    self._refresh_failure_class,
+                )
+                return self.async_show_progress_done(
+                    next_step_id='refresh_failed'
+                )
+            if not isinstance(self._refresh_result, dict):
+                self._refresh_failure_class = 'InvalidServiceResponse'
+                return self.async_show_progress_done(
+                    next_step_id='refresh_failed'
+                )
+            return self.async_show_progress_done(
+                next_step_id='refresh_complete'
+            )
+
+        if not self._refresh_task:
+            self._refresh_task = self.hass.async_create_task(
+                self._async_call_entry_service('renew_devices')
+            )
+
+        return self.async_show_progress(
+            step_id='refresh_devices',
+            progress_action='refresh_devices',
+            progress_task=self._refresh_task,
+        )
+
+    async def async_step_refresh_complete(self, user_input=None):
+        """Show a safe Xiaomi discovery summary."""
+        summary = self._refresh_result or {}
+        return self.async_abort(
+            reason='refresh_complete',
+            description_placeholders={
+                'new': str(summary.get('new', 0)),
+                'updated': str(summary.get('updated', 0)),
+                'unchanged': str(summary.get('unchanged', 0)),
+                'failed': str(summary.get('failed', 0)),
+                'reloaded': str(bool(summary.get('reloaded', False))).lower(),
+            },
+        )
+
+    async def async_step_refresh_failed(self, user_input=None):
+        """Report refresh failure without exposing exception content."""
+        return self.async_abort(reason='refresh_failed')
+
+    async def async_step_retry_cloud(self, user_input=None):
+        """Request an immediate cloud retry for this config entry."""
+        from .core.hass_entry import HassEntry
+
+        runtime_entry = HassEntry.ALL.get(self.config_entry.entry_id)
+        if runtime_entry and runtime_entry.cloud_ready:
+            return self.async_abort(reason='retry_already_ready')
+
+        try:
+            result = await self._async_call_entry_service('retry_cloud')
+        except HomeAssistantError as exc:
+            _LOGGER.warning(
+                'Xiaomi UI cloud retry failed for entry=%s (%s)',
+                self.config_entry.entry_id,
+                type(exc).__name__,
+            )
+            return self.async_abort(reason='retry_failed')
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning(
+                'Unexpected Xiaomi UI cloud retry failure for entry=%s (%s)',
+                self.config_entry.entry_id,
+                type(exc).__name__,
+            )
+            return self.async_abort(reason='retry_failed')
+
+        if not isinstance(result, dict):
+            return self.async_abort(reason='retry_failed')
+        if result.get('cloud_ready'):
+            return self.async_abort(reason='retry_already_ready')
+
+        status = result.get('status')
+        if status == 'started':
+            reason = 'retry_started'
+        elif status == 'already_running':
+            reason = 'retry_already_running'
+        else:
+            reason = 'retry_failed'
+        return self.async_abort(
+            reason=reason,
+            description_placeholders={
+                'bootstrap_state': str(result.get('bootstrap_state', 'unknown')),
+            },
+        )
 
     async def async_step_user(self, user_input=None):
         errors = {}
@@ -769,7 +910,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 self.config_data.pop('filter_model', None)
                 self.config_data.pop('model_list', None)
             self.hass.config_entries.async_update_entry(self.config_entry, data=self.config_data)
-            _LOGGER.debug('Setup xiaomi cloud: %s', {**self.config_data, CONF_PASSWORD: '*', 'service_token': '*'})
+            _LOGGER.debug('Setup xiaomi cloud: keys=%s', sorted(self.config_data))
             return self.async_create_entry(title='', data={})
         else:
             errors['base'] = 'unknown'

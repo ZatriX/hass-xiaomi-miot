@@ -72,6 +72,15 @@
     },
     "options": {
         "step": {
+            "init": {
+                "title": "Xiaomi Miot",
+                "description": "Выберите операцию с аккаунтом.",
+                "menu_options": {
+                    "cloud": "Настроить аккаунт Xiaomi Cloud",
+                    "refresh_devices": "Обновить устройства из Xiaomi Cloud",
+                    "retry_cloud": "Повторить подключение к Xiaomi Cloud"
+                }
+            },
             "user": {
                 "title": "Xiaomi Miot",
                 "description": "Конфигурация устройства.",
@@ -90,7 +99,7 @@
                     "captcha": "Captcha",
                     "server_country": "Регион сервера MiCloud",
                     "conn_mode": "Режим подключения устройств",
-                    "renew_devices": "Заставлять устройства обновляться",
+                    "renew_devices": "Обновить устройства из Xiaomi Cloud",
                     "disable_message": "Выключить датчик уведомлений от Mi Home"
                 }
             },
@@ -109,6 +118,9 @@
                 }
             }
         },
+        "progress": {
+            "refresh_devices": "Обновление устройств из Xiaomi Cloud"
+        },
         "error": {
             "cannot_connect": "Не удалость подключиться к устройству",
             "cannot_login": "Не удалось полключиться к аккаунту Сяоми. Проверьте пароль. При повторных ошибках авторизируйтесь на mi.com в той же среде и попробуйте снова.",
@@ -117,16 +129,27 @@
             "none_devices": "Не найдено устройств в облаке Сяоми"
         },
         "abort": {
-            "show_customizes": "[Add a new integration](/_my_redirect/config_flow_start?domain=xiaomi_miot) to modify customization.\n{link}\n{tip}"
+            "show_customizes": "[Add a new integration](/_my_redirect/config_flow_start?domain=xiaomi_miot) to modify customization.\n{link}\n{tip}",
+            "refresh_complete": "Обновление устройств завершено. Новых: {new}; обновлено: {updated}; без изменений: {unchanged}; ошибок: {failed}; интеграция перезагружена: {reloaded}.",
+            "refresh_failed": "Не удалось обновить устройства. Существующий cache и локальный runtime продолжают работать.",
+            "retry_started": "Повторное подключение к Xiaomi Cloud запущено. Состояние bootstrap: {bootstrap_state}.",
+            "retry_already_running": "Подключение к Xiaomi Cloud уже выполняется. Состояние bootstrap: {bootstrap_state}.",
+            "retry_already_ready": "Xiaomi Cloud уже подключён и готов к работе.",
+            "retry_failed": "Не удалось запустить подключение к Xiaomi Cloud. Локальный runtime продолжает работать."
         }
     },
     "system_health": {
         "info": {
             "component_version": "Версия компонента",
-            "can_reach_server": "Доступность API сервера Сяоми",
-            "can_reach_spec": "Доступность MIoT-Spec сервера",
-            "logged_accounts": "Авторизованные аккаунты",
-            "total_devices": "Общее количество устройств MiHome"
+            "config_entries": "Загруженные записи конфигурации",
+            "runtime_status": "Состояние Xiaomi runtime",
+            "local_configured_devices": "Настроенные локальные устройства",
+            "local_reachable_devices": "Доступные локальные устройства",
+            "local_unavailable_devices": "Недоступные локальные устройства",
+            "cloud_only_devices": "Только облачные устройства",
+            "cloud_ready_entries": "Записи с доступным Xiaomi Cloud",
+            "bootstrap_state": "Состояние фонового подключения к облаку",
+            "last_successful_cache_refresh": "Последнее успешное обновление discovery cache"
         }
     }
 }

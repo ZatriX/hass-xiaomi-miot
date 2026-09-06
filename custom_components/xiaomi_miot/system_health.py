@@ -1,40 +1,50 @@
-"""Provide info to system health."""
+"""Provide non-polling Xiaomi Miot system health information."""
+
 from homeassistant.components import system_health
 from homeassistant.core import HomeAssistant, callback
 
+from .core.hass_entry import HassEntry
+from .core.runtime_status import async_cache_snapshot
 from .core.utils import async_get_manifest
-from .core.xiaomi_cloud import MiotCloud
 
 
 @callback
-def async_register(hass: HomeAssistant, register: system_health.SystemHealthRegistration) -> None:
+def async_register(
+    hass: HomeAssistant,
+    register: system_health.SystemHealthRegistration,
+) -> None:
     """Register system health callbacks."""
-    register.async_register_info(system_health_info, '/config/integrations')
+    register.async_register_info(system_health_info, "/config/integrations")
 
 
-async def system_health_info(hass):
-    """Get info for the info page."""
-    mic = None
-    uas = {}
-    uds = {}
-    all_devices = {}
-    for mic in MiotCloud.all_clouds(hass):
-        uas[mic.user_id] = mic
-        uds[mic.unique_id] = await mic.async_get_devices_by_key('did') or {}
-        all_devices.update(uds[mic.unique_id])
+async def system_health_info(hass: HomeAssistant):
+    """Return existing runtime state without Xiaomi or LAN probes."""
+    entries = list(HassEntry.ALL.values())
+    snapshots = [entry.runtime_snapshot() for entry in entries]
+    caches = [await async_cache_snapshot(entry) for entry in entries]
 
-    api = mic.get_api_url('') if mic else 'https://api.io.mi.com'
-    api_spec = 'https://miot-spec.org/miot-spec-v2/spec/services'
-
-    version = await async_get_manifest(hass, 'version', 'unknown')
-    data = {
-        'component_version': version,
-        'can_reach_server': system_health.async_check_can_reach_url(hass, api),
-        'can_reach_spec': system_health.async_check_can_reach_url(
-            hass, api_spec, 'https://home.miot-spec.com/?cant-reach',
+    statuses = sorted({item["status"] for item in snapshots})
+    bootstrap_states = sorted({item["bootstrap"]["state"] for item in snapshots})
+    refreshes = [
+        item["last_successful_refresh"]
+        for item in caches
+        if item.get("last_successful_refresh")
+    ]
+    return {
+        "component_version": await async_get_manifest(hass, "version", "unknown"),
+        "config_entries": len(entries),
+        "runtime_status": ", ".join(statuses) if statuses else "unavailable",
+        "local_configured_devices": sum(
+            item["local_configured_devices"] for item in snapshots
         ),
-        'logged_accounts': len(uas),
-        'total_devices': len(all_devices),
+        "local_reachable_devices": sum(
+            item["local_reachable_devices"] for item in snapshots
+        ),
+        "local_unavailable_devices": sum(
+            item["local_unavailable_devices"] for item in snapshots
+        ),
+        "cloud_only_devices": sum(item["cloud_only_devices"] for item in snapshots),
+        "cloud_ready_entries": sum(bool(item["cloud_ready"]) for item in snapshots),
+        "bootstrap_state": ", ".join(bootstrap_states) if bootstrap_states else "stopped",
+        "last_successful_cache_refresh": max(refreshes) if refreshes else None,
     }
-
-    return data

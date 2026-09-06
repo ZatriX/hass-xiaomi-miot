@@ -102,6 +102,41 @@ set_miot_property:
       selector:
         object:
 
+set_miot_property_local:
+  description: Set a MIoT property over the local LAN transport only. Fails if local transport is unavailable and never falls back to Xiaomi Cloud.
+  fields:
+    entity_id:
+      description: ID of the entity whose device will receive the local command.
+      example: fan.dmaker_p33_028a_fan
+      required: true
+      selector:
+        entity:
+          integration: xiaomi_miot
+    siid:
+      description: MIoT service ID.
+      example: 4
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box
+    piid:
+      description: MIoT property ID.
+      example: 1
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box
+    value:
+      description: Property value.
+      example: false
+      required: true
+      selector:
+        object:
+
 call_action:
   description: Call miot action.
   fields:
@@ -250,22 +285,34 @@ get_device_data:
             - month
 
 renew_devices:
-  description: Renew xiaomi devices.
+  name: Refresh devices from Xiaomi cloud
+  description: Refresh one account's discovery cache and safely reconcile newly discovered devices.
   fields:
+    config_entry_id:
+      name: Config entry
+      description: Xiaomi Miot account config entry to refresh.
+      required: true
+      selector:
+        config_entry:
+          integration: xiaomi_miot
     username:
+      name: Xiaomi account
       description: Xiaomi Account ID / Email / Phone.
       required: false
       selector:
         text:
 
-get_token:
-  description: Get xiaomi device token.
+retry_cloud:
+  name: Retry Xiaomi cloud connection
+  description: Request an immediate background cloud retry without reloading local devices.
   fields:
-    name:
-      description: Keyword of device name in Mihome / IP / Model.
+    config_entry_id:
+      name: Config entry
+      description: Xiaomi Miot account config entry whose background cloud task should retry.
       required: true
       selector:
-        text:
+        config_entry:
+          integration: xiaomi_miot
 
 get_bindkey:
   description: Get bindkey for ble device from cloud.

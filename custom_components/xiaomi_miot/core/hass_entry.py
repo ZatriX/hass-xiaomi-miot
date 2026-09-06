@@ -1,11 +1,13 @@
 import logging
 import asyncio
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import Any, TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_USERNAME
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import SUPPORTED_DOMAINS
+from .runtime_status import CloudBootstrapStatus, runtime_snapshot
 from .xiaomi_cloud import MiotCloud
 
 if TYPE_CHECKING:
@@ -26,6 +28,14 @@ class HassEntry:
         self.devices: dict[str, 'Device'] = {}
         self.mac_to_did = {}
         self.did_to_unique = {}
+        self.cloud_ready = False
+        self.cloud_bootstrap_factory: Callable[[], Coroutine[Any, Any, None]] | None = None
+        self.cloud_bootstrap_task: asyncio.Task | None = None
+        self.cloud_retry_event = asyncio.Event()
+        self.cloud_bootstrap_status = CloudBootstrapStatus()
+        self.local_cache_usable = False
+        self.cached_local_devices = 0
+        self.cached_cloud_only_devices = 0
 
     @staticmethod
     def init(hass: HomeAssistant, entry: ConfigEntry):
@@ -36,6 +46,7 @@ class HassEntry:
         return this
 
     async def async_unload(self):
+        await self.async_cancel_cloud_bootstrap()
         ret = all(
             await asyncio.gather(
                 *[
@@ -49,6 +60,50 @@ class HassEntry:
                 await device.async_unload()
             HassEntry.ALL.pop(self.entry.entry_id, None)
         return ret
+
+    def set_cloud_bootstrap(self, factory: Callable[[], Coroutine[Any, Any, None]] | None):
+        self.cloud_bootstrap_factory = factory
+
+    def start_cloud_bootstrap(self):
+        """Start one config-entry-owned cloud task after local platform setup."""
+        if not self.cloud_bootstrap_factory:
+            return None
+        if self.cloud_bootstrap_task and not self.cloud_bootstrap_task.done():
+            self.cloud_bootstrap_task.cancel()
+        self.cloud_bootstrap_task = self.entry.async_create_background_task(
+            self.hass,
+            self.cloud_bootstrap_factory(),
+            f'{self.id} Xiaomi cloud bootstrap',
+        )
+        return self.cloud_bootstrap_task
+
+    def request_cloud_retry(self) -> str:
+        """Request an immediate retry without creating a duplicate task."""
+        task = self.cloud_bootstrap_task
+        if task and not task.done():
+            if self.cloud_bootstrap_status.state == 'backoff':
+                self.cloud_retry_event.set()
+                return 'started'
+            return 'already_running'
+        if not self.cloud_bootstrap_factory:
+            return 'failed'
+        self.start_cloud_bootstrap()
+        return 'started'
+
+    async def async_cancel_cloud_bootstrap(self):
+        task = self.cloud_bootstrap_task
+        self.cloud_bootstrap_task = None
+        self.cloud_bootstrap_factory = None
+        if not task or task.done():
+            self.cloud_bootstrap_status.stopped()
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.cloud_bootstrap_status.stopped(cancelled=True)
+
+    def runtime_snapshot(self):
+        """Return the safe, non-polling operational snapshot."""
+        return runtime_snapshot(self)
 
     def __getattr__(self, item):
         return getattr(self.entry, item)
@@ -129,6 +184,16 @@ class HassEntry:
             mac = info.get('mac') or did
             self.mac_to_did[mac] = did
         return self.cloud_devices
+
+    async def get_cached_cloud_devices(self):
+        """Return persisted discovery data without checking auth or cache age."""
+        config = self.get_config()
+        devices = await MiotCloud.async_load_cached_devices(
+            self.hass,
+            str(config.get('user_id') or ''),
+            config.get('server_country') or 'cn',
+        )
+        return MiotCloud.devices_by_key(devices, 'did', filters=config)
 
     async def get_cloud_device(self, did=None, mac=None):
         devices = await self.get_cloud_devices()

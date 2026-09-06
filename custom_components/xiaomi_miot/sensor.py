@@ -43,31 +43,46 @@ SERVICE_TO_METHOD = {}
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     entry = HassEntry.init(hass, config_entry).new_adder(ENTITY_DOMAIN, async_add_entities)
-    cloud = await entry.get_cloud()
+    await async_setup_cloud_entities(hass, entry, async_add_entities)
+    await async_setup_config_entry(hass, config_entry, async_setup_platform, async_add_entities, ENTITY_DOMAIN)
 
-    if cloud:
+
+async def async_setup_cloud_entities(hass, entry, async_add_entities=None):
+    """Create or refresh account entities after cloud becomes ready."""
+    async_add_entities = async_add_entities or entry.adders.get(ENTITY_DOMAIN)
+    if not async_add_entities:
+        return
+    cloud = entry.cloud
+
+    if cloud and entry.cloud_ready:
+        account = hass.data[DOMAIN]['accounts'].setdefault(cloud.user_id, {})
         if not entry.get_config('disable_message'):
-            hass.data[DOMAIN]['accounts'].setdefault(cloud.user_id, {})
-
-            if not hass.data[DOMAIN]['accounts'][cloud.user_id].get('messenger'):
+            if entity := account.get('messenger'):
+                await entity.coordinator.async_refresh()
+            else:
                 entity = MihomeMessageSensor(hass, cloud)
-                await entity.coordinator.async_config_entry_first_refresh()
-                hass.data[DOMAIN]['accounts'][cloud.user_id]['messenger'] = entity
+                # Register before the first feature refresh. A transient
+                # ConfigEntryError must leave an unavailable coordinator that
+                # can recover on its normal cadence or an explicit refresh.
+                account['messenger'] = entity
                 async_add_entities([entity], update_before_add=False)
+                await entity.coordinator.async_refresh()
 
         if not entry.get_config('disable_scene_history'):
+            for key, entity in list(account.items()):
+                if key.startswith('scene_history_'):
+                    await entity.coordinator.async_refresh()
             homes = await cloud.async_get_homerooms()
             for home in homes:
                 home_id = home.get('id')
-                if hass.data[DOMAIN]['accounts'][cloud.user_id].get(f'scene_history_{home_id}'):
+                key = f'scene_history_{home_id}'
+                if account.get(key):
                     continue
 
                 entity = MihomeSceneHistorySensor(hass, cloud, home_id, home.get('uid'))
-                await entity.coordinator.async_config_entry_first_refresh()
-                hass.data[DOMAIN]['accounts'][cloud.user_id][f'scene_history_{home_id}'] = entity
+                account[key] = entity
                 async_add_entities([entity], update_before_add=False)
-
-    await async_setup_config_entry(hass, config_entry, async_setup_platform, async_add_entities, ENTITY_DOMAIN)
+                await entity.coordinator.async_refresh()
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):

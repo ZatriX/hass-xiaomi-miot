@@ -309,7 +309,11 @@ class MiotSpec(MiotSpecInstance):
             try:
                 url = '/miot-spec-v2/instances?status=all'
                 dat = await MiotSpec.async_download_miot_spec(hass, url, tries=3, timeout=90)
-                if dat:
+                if (
+                    isinstance(dat, dict)
+                    and isinstance(dat.get('instances'), list)
+                    and dat.get('instances')
+                ):
                     sdt = {
                         '_updated_time': now,
                     }
@@ -329,7 +333,11 @@ class MiotSpec(MiotSpecInstance):
                         'Renew miot spec instances: %s, count: %s, model: %s',
                         fnm, len(sdt) - 1, model,
                     )
-            except (TypeError, ValueError, BaseException) as exc:
+                else:
+                    raise ValueError('Invalid MIoT instances response')
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if not cached:
                     raise exc
                 dat = cached
@@ -345,7 +353,7 @@ class MiotSpec(MiotSpecInstance):
         return typ
 
     @staticmethod
-    async def async_from_type(hass, typ, trans_options=False):
+    async def async_from_type(hass, typ, trans_options=False, cache_only=False, use_remote=False):
         if not typ:
             return None
         fnm = f'{DOMAIN}/{typ}.json'
@@ -363,15 +371,21 @@ class MiotSpec(MiotSpecInstance):
         ttl = 60
         if dat.get('services'):
             ttl = 86400 * random.randint(30, 50)
-        if dat and now - ptm > ttl:
+        if dat and (use_remote or now - ptm > ttl) and not cache_only:
             dat = {}
         if not dat.get('type'):
+            if cache_only:
+                return None
             try:
                 url = f'/miot-spec-v2/instance?type={typ}'
                 dat = await MiotSpec.async_download_miot_spec(hass, url, tries=3)
+                if not isinstance(dat, dict) or not dat.get('type') or not dat.get('services'):
+                    raise ValueError('Invalid MIoT spec response')
                 dat['_updated_time'] = now
                 await store.async_save(dat)
-            except (TypeError, ValueError, BaseException) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if cached:
                     dat = cached
                 else:
@@ -383,8 +397,28 @@ class MiotSpec(MiotSpecInstance):
                     await store.async_save(dat)
                     _LOGGER.warning('Get miot-spec for %s failed: %s', typ, exc)
 
-        translations = await MiotSpec.async_get_langs(hass, typ)
+        translations = await MiotSpec.async_get_langs(
+            hass,
+            typ,
+            cache_only=cache_only,
+            use_remote=use_remote,
+        )
         return MiotSpec(hass, dat, translations, trans_options=trans_options)
+
+    @staticmethod
+    async def async_cached_type_available(hass, typ):
+        """Check for a usable persisted spec without touching the network."""
+        if not typ:
+            return False
+        fnm = f'{DOMAIN}/{typ}.json'
+        if platform.system() == 'Windows':
+            fnm = fnm.replace(':', '_')
+        store = Store(hass, 1, fnm)
+        try:
+            dat = await store.async_load() or {}
+        except (ValueError, HomeAssistantError):
+            return False
+        return bool(dat.get('type') and dat.get('services'))
 
     @staticmethod
     def unique_prop(siid, piid=None, aiid=None, eiid=None, valid=False):
@@ -417,7 +451,7 @@ class MiotSpec(MiotSpecInstance):
         return key
 
     @staticmethod
-    async def async_get_langs(hass, typ):
+    async def async_get_langs(hass, typ, cache_only=False, use_remote=False):
         if not typ:
             return None
         fnm = f'{DOMAIN}/spec-langs/{typ}.json'
@@ -435,15 +469,21 @@ class MiotSpec(MiotSpecInstance):
         ttl = 60
         if dat.get('data'):
             ttl = 86400 * random.randint(30, 50)
-        if dat and now - ptm > ttl:
+        if dat and (use_remote or now - ptm > ttl) and not cache_only:
             dat = {}
         if not dat.get('type'):
+            if cache_only:
+                return {}
             try:
                 url = f'/instance/v2/multiLanguage?urn={typ}'
                 dat = await MiotSpec.async_download_miot_spec(hass, url, tries=3)
+                if not isinstance(dat, dict) or not dat.get('type'):
+                    raise ValueError('Invalid MIoT language response')
                 dat['_updated_time'] = now
                 await store.async_save(dat)
-            except (TypeError, ValueError, BaseException) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 if cached:
                     dat = cached
                 else:
@@ -475,7 +515,9 @@ class MiotSpec(MiotSpecInstance):
                 except asyncio.TimeoutError as exc:
                     exception = exc
                     _LOGGER.warning('Timeout when trying to request %s', url)
-                except BaseException as exc:
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
                     exception = exc
                     _LOGGER.warning('Got exception %s when trying to request %s', exc, url)
             tries -= 1
